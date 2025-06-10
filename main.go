@@ -67,7 +67,7 @@ func printEnhancedDomainInfo(enhanced *rules.EnhancedDomainInfo) {
 	fmt.Println("\nRule Check Results:")
 	for _, result := range enhanced.RuleResults {
 		icon := getRuleStatusIcon(result.Status)
-		fmt.Printf("%s %s: %s\n", icon, result.Description, result.Message)
+		fmt.Printf("%s - %s: %s\n", icon, result.Description, result.Message)
 	}
 }
 

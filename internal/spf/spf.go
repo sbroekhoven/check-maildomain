@@ -34,11 +34,9 @@ func LookupSPF(domain string, nameserver string) (*SPFRecord, error) {
 	if in.Rcode != dns.RcodeSuccess {
 		return nil, fmt.Errorf("DNS query returned non-success code: %v", dns.RcodeToString[in.Rcode])
 	}
-	println("line 39")
 
 	// Look for SPF record in TXT records
 	for _, ain := range in.Answer {
-		println("line 42")
 		if a, ok := ain.(*dns.TXT); ok {
 
 			// Join TXT chunks into single string
