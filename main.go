@@ -14,7 +14,7 @@ func main() {
 	// Define flags
 	domain := flag.String("domain", "suspiciousbytes.com", "what domain to use")
 	nameserver := flag.String("nameserver", "8.8.8.8", "what nameserver to use")
-	jsonOutput := flag.Bool("json", true, "output as JSON")
+	jsonOutput := flag.Bool("json", false, "output as JSON")
 
 	// Parse the flags
 	flag.Parse()
@@ -37,5 +37,51 @@ func main() {
 			log.Fatalf("Error marshaling to JSON: %v", err)
 		}
 		fmt.Println(string(jsonData))
+	} else {
+		// Output as console friendly
+		printEnhancedDomainInfo(enhanced)
+	}
+}
+
+func printEnhancedDomainInfo(enhanced *rules.EnhancedDomainInfo) {
+	fmt.Println("Domain Info:")
+	fmt.Printf("Domain: %s\n", enhanced.DomainInfo.Domain)
+	fmt.Printf("Checked at: %v\n", enhanced.DomainInfo.QueryTime)
+
+	fmt.Println("\nDNSSEC Info:")
+	if enhanced.DomainInfo.DNSSECInfo != nil {
+		fmt.Printf("DNSSEC Enabled: %v\n", enhanced.DomainInfo.DNSSECInfo.Enabled)
+	} else {
+		fmt.Println("DNSSEC Info: Not available")
+	}
+
+	fmt.Println("\nMX Records:")
+	if len(enhanced.DomainInfo.MXRecords) > 0 {
+		for _, mx := range enhanced.DomainInfo.MXRecords {
+			fmt.Printf("Host: %s, Priority: %d\n", mx.Host, mx.Priority)
+		}
+	} else {
+		fmt.Println("No MX records found")
+	}
+
+	fmt.Println("\nRule Check Results:")
+	for _, result := range enhanced.RuleResults {
+		icon := getRuleStatusIcon(result.Status)
+		fmt.Printf("%s %s: %s\n", icon, result.Description, result.Message)
+	}
+}
+
+func getRuleStatusIcon(status string) string {
+	switch status {
+	case "pass":
+		return "✅"
+	case "warn":
+		return "⚠️"
+	case "fail":
+		return "❌"
+	case "info":
+		return "ℹ️"
+	default:
+		return "❓"
 	}
 }

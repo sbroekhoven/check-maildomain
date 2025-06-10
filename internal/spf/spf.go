@@ -21,25 +21,28 @@ func LookupSPF(domain string, nameserver string) (*SPFRecord, error) {
 		nameserver = nameserver + ":53"
 	}
 
-	c := new(dns.Client)
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeTXT)
-	m.RecursionDesired = true
+	m.MsgHdr.RecursionDesired = true
+	c := new(dns.Client)
 
-	r, _, err := c.Exchange(m, nameserver)
+	in, _, err := c.Exchange(m, nameserver)
 	if err != nil {
 		return nil, fmt.Errorf("DNS query failed: %v", err)
 	}
 
-	if r.Rcode != dns.RcodeSuccess {
-		return nil, fmt.Errorf("DNS query returned non-success code: %v", dns.RcodeToString[r.Rcode])
+	if in.Rcode != dns.RcodeSuccess {
+		return nil, fmt.Errorf("DNS query returned non-success code: %v", dns.RcodeToString[in.Rcode])
 	}
+	println("line 39")
 
 	// Look for SPF record in TXT records
-	for _, a := range r.Answer {
-		if txt, ok := a.(*dns.TXT); ok {
+	for _, ain := range in.Answer {
+		println("line 42")
+		if a, ok := ain.(*dns.TXT); ok {
+
 			// Join TXT chunks into single string
-			txtValue := strings.Join(txt.Txt, "")
+			txtValue := strings.Join(a.Txt, "")
 
 			// Check if this is an SPF record
 			if strings.HasPrefix(strings.ToLower(txtValue), "v=spf1") {
@@ -63,10 +66,12 @@ func LookupSPFWithFallback(domain string, nameserver string) (*SPFRecord, error)
 	if err == nil {
 		return record, nil
 	}
+	println(err.Error())
 
 	// Fallback to standard library
 	txtRecords, err := net.LookupTXT(domain)
 	if err != nil {
+		println(err.Error())
 		return nil, fmt.Errorf("TXT lookup failed: %v", err)
 	}
 
@@ -105,10 +110,4 @@ func (r *SPFRecord) HasIP(ip string) bool {
 		}
 	}
 	return false
-}
-
-// String returns a formatted representation of the SPF record
-func (r *SPFRecord) String() string {
-	return fmt.Sprintf("SPF Record: %s\nVersion: %s\nTerms: %v",
-		r.Raw, r.Version, r.Terms)
 }
