@@ -5,6 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"time"
 
 	"check-maildomain/internal/dns"
 	"check-maildomain/internal/rules"
@@ -15,6 +18,7 @@ func main() {
 	domain := flag.String("domain", "suspiciousbytes.com", "what domain to use")
 	nameserver := flag.String("nameserver", "8.8.8.8", "what nameserver to use")
 	jsonOutput := flag.Bool("json", false, "output as JSON")
+	outputFolder := flag.String("output", "", "folder to save JSON output files")
 
 	// Parse the flags
 	flag.Parse()
@@ -36,6 +40,26 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error marshaling to JSON: %v", err)
 		}
+
+		// If output folder is specified, save to file
+		if *outputFolder != "" {
+			// Create output folder if it doesn't exist
+			if err := os.MkdirAll(*outputFolder, 0755); err != nil {
+				log.Fatalf("Error creating output folder: %v", err)
+			}
+
+			// Generate filename with timestamp and domain
+			timestamp := time.Now().Format("20060102150405") // YYYYMMDDHHmmss
+			filename := filepath.Join(*outputFolder, fmt.Sprintf("%s-%s.json", timestamp, *domain))
+
+			// Write JSON to file
+			if err := os.WriteFile(filename, jsonData, 0644); err != nil {
+				log.Fatalf("Error writing JSON to file: %v", err)
+			}
+
+			fmt.Printf("Results saved to: %s\n", filename)
+		}
+
 		fmt.Println(string(jsonData))
 	} else {
 		// Output as console friendly
