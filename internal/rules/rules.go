@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/sbroekhoven/check-maildomain/internal/collector"
@@ -62,6 +63,17 @@ func (info *EnhancedDomainInfo) add(id int, area Area, description string, statu
 		Status:      status,
 		Message:     message,
 	})
+}
+
+// addIfLookupFailed records an info result and returns true when the lookup for check failed,
+// so the rule can't tell whether the record is missing
+func (info *EnhancedDomainInfo) addIfLookupFailed(id int, area Area, check string) bool {
+	err, failed := info.LookupFailure(check)
+	if failed {
+		info.add(id, area, "Could not be checked", StatusInfo,
+			fmt.Sprintf("The %s lookup failed, so this could not be checked: %s", area, err))
+	}
+	return failed
 }
 
 // HasStatus reports whether any rule ended with the given status

@@ -95,7 +95,7 @@ func LookupSPF(domain string, res *resolver.Resolver) (*SPFRecord, error) {
 
 	record, count := findSPF(txts)
 	if record == nil {
-		return nil, fmt.Errorf("no SPF record found for domain: %s", domain)
+		return nil, &resolver.NotFoundError{What: "SPF", Name: domain}
 	}
 	record.RecordCount = count
 	record.LookupCount, record.LookupErrors = CountLookups(domain, record, res.TXT)

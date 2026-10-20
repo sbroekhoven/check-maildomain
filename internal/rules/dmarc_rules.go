@@ -29,6 +29,9 @@ func CheckDMARCPolicy(info *EnhancedDomainInfo) {
 
 // CheckDMARCExists verifies that a DMARC record exists for the domain
 func CheckDMARCExists(info *EnhancedDomainInfo) {
+	if info.addIfLookupFailed(5, AreaDMARC, "dmarc") {
+		return
+	}
 	if info.DMARCRecord == nil {
 		info.add(5, AreaDMARC, "No DMARC record", StatusFail,
 			"No DMARC record was found for this domain. DMARC is essential for preventing email spoofing. Add a DMARC record with p=reject or at least p=quarantine.")

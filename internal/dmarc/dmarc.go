@@ -1,7 +1,6 @@
 package dmarc
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -38,7 +37,7 @@ type DMARCPolicy struct {
 // the record of the organizational domain (RFC 7489 6.6.3) is used instead.
 func LookupDMARC(domain string, res *resolver.Resolver) (*DMARCRecord, error) {
 	record, err := lookupDMARCAt(domain, res)
-	if record != nil || (err != nil && !isNoRecord(err)) {
+	if record != nil || (err != nil && !resolver.IsNotFound(err)) {
 		return record, err
 	}
 
@@ -47,13 +46,6 @@ func LookupDMARC(domain string, res *resolver.Resolver) (*DMARCRecord, error) {
 		return nil, err
 	}
 	return lookupDMARCAt(orgDomain, res)
-}
-
-// errNoRecord is returned when the _dmarc name exists but holds no DMARC record
-var errNoRecord = errors.New("no DMARC record found")
-
-func isNoRecord(err error) bool {
-	return errors.Is(err, errNoRecord) || resolver.IsNXDomain(err)
 }
 
 func lookupDMARCAt(domain string, res *resolver.Resolver) (*DMARCRecord, error) {
@@ -71,7 +63,7 @@ func lookupDMARCAt(domain string, res *resolver.Resolver) (*DMARCRecord, error) 
 		}
 	}
 
-	return nil, fmt.Errorf("%w for domain: %s", errNoRecord, dmarcDomain)
+	return nil, &resolver.NotFoundError{What: "DMARC", Name: dmarcDomain}
 }
 
 // OrganizationalDomain returns the registrable domain (e.g. example.co.uk for mail.example.co.uk)

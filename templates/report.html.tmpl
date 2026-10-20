@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Mail domain report: {{.Domain}}</title>
+<style>
+:root {
+  --bg: #f5f6f8;
+  --card: #ffffff;
+  --text: #1c2026;
+  --muted: #5d6673;
+  --border: #e1e4e9;
+  --code-bg: #f0f2f5;
+  --pass: #1f8f4e;
+  --pass-bg: #e3f5ea;
+  --warn: #b86e00;
+  --warn-bg: #fdf0d9;
+  --fail: #c9302c;
+  --fail-bg: #fbe4e3;
+  --info: #2867c5;
+  --info-bg: #e2ecfa;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --card: #1a1e24;
+    --text: #e6e8eb;
+    --muted: #98a1ad;
+    --border: #2b313a;
+    --code-bg: #232931;
+    --pass: #4cc283;
+    --pass-bg: #173826;
+    --warn: #f0a83a;
+    --warn-bg: #3d2c10;
+    --fail: #f2675f;
+    --fail-bg: #451c1a;
+    --info: #6aa3f2;
+    --info-bg: #182d4a;
+    --shadow: none;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 32px 16px 48px; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+
+/* Header */
+header.summary {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;
+  margin-bottom: 24px;
+}
+header h1 { margin: 0; font-size: 28px; line-height: 1.2; overflow-wrap: anywhere; }
+header .meta { color: var(--muted); font-size: 14px; margin-top: 4px; }
+.verdict { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 600;
+}
+.verdict-badge { font-size: 15px; padding: 6px 14px; }
+
+/* Status colours */
+.pass { --c: var(--pass); --c-bg: var(--pass-bg); }
+.warn { --c: var(--warn); --c-bg: var(--warn-bg); }
+.fail { --c: var(--fail); --c-bg: var(--fail-bg); }
+.info { --c: var(--info); --c-bg: var(--info-bg); }
+.chip, .badge { color: var(--c); background: var(--c-bg); }
+.icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--c); color: #fff; font-size: 12px; font-weight: 700; line-height: 1;
+}
+@media (prefers-color-scheme: dark) { .icon { color: var(--card); } }
+
+/* Area cards */
+.areas { display: grid; gap: 16px; }
+.card {
+  background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--c);
+  border-radius: 10px; box-shadow: var(--shadow); padding: 18px 20px; min-width: 0;
+}
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card h2 { margin: 0; font-size: 18px; }
+.card .lead { color: var(--muted); margin: 4px 0 0; overflow-wrap: anywhere; }
+.badge { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.card h3 {
+  margin: 18px 0 8px; font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted);
+}
+
+/* Found data */
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+dl.facts dd.mono { background: var(--code-bg); padding: 4px 8px; border-radius: 6px; }
+table.data { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+table.data th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; }
+table.data th, table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.data td { overflow-wrap: anywhere; white-space: pre-line; }
+table.data td:first-child, table.data th:first-child { white-space: nowrap; overflow-wrap: normal; }
+.error { margin-top: 12px; padding: 8px 10px; border-radius: 6px; background: var(--code-bg); color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+
+/* Checks */
+ul.checks { list-style: none; margin: 0; padding: 0; }
+ul.checks li { padding: 8px 0; border-top: 1px solid var(--border); }
+ul.checks li:first-child { border-top: 0; }
+.check { display: flex; align-items: flex-start; gap: 10px; }
+.check .title { font-weight: 500; }
+.check .message { color: var(--muted); font-size: 14px; margin-top: 2px; }
+.check .rule-id { color: var(--muted); font-size: 12px; margin-left: auto; padding-left: 8px; white-space: nowrap; }
+details summary { cursor: pointer; list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details summary .title::after { content: " ›"; color: var(--muted); }
+details[open] summary .title::after { content: " ⌄"; }
+.check-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.detail { padding: 2px 0 0 30px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+
+footer { margin-top: 32px; color: var(--muted); font-size: 13px; text-align: center; }
+footer a { color: inherit; }
+
+@media (max-width: 600px) {
+  main { padding-top: 20px; }
+  header h1 { font-size: 22px; }
+  .verdict { align-items: flex-start; }
+  .card { padding: 14px 16px; }
+  dl.facts { grid-template-columns: 1fr; gap: 2px; }
+  dl.facts dd { margin-bottom: 8px; }
+}
+
+@media print {
+  :root { --bg: #fff; --card: #fff; --shadow: none; }
+  body { font-size: 12px; }
+  main { max-width: none; padding: 0; }
+  .card { break-inside: avoid; margin-bottom: 12px; }
+  details summary .title::after { content: ""; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header class="summary">
+    <div>
+      <h1>{{.Domain}}</h1>
+      <div class="meta">Checked {{.Checked}} · via {{.Nameserver}}</div>
+    </div>
+    <div class="verdict">
+      <span class="chip verdict-badge {{.Worst}}"><span class="icon">{{icon .Worst}}</span>{{.Verdict}}</span>
+      <div class="chips">
+        {{- range .Counts}}
+        <span class="chip {{.Status}}">{{.Label}}</span>
+        {{- end}}
+      </div>
+    </div>
+  </header>
+
+  <div class="areas">
+  {{- range .Areas}}
+    <section class="card {{.Worst}}" id="{{.ID}}">
+      <div class="card-head">
+        <h2>{{.Area}}</h2>
+        <span class="badge">{{.Worst}}</span>
+      </div>
+      <p class="lead">{{.Summary}}</p>
+
+      {{- if or .Facts .Table}}
+      <h3>Found</h3>
+      {{- if .Facts}}
+      <dl class="facts">
+        {{- range .Facts}}
+        <dt>{{.Label}}</dt>
+        <dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>
+        {{- end}}
+      </dl>
+      {{- end}}
+      {{- with .Table}}
+      <table class="data">
+        <thead><tr>{{range .Head}}<th>{{.}}</th>{{end}}</tr></thead>
+        <tbody>
+          {{- range .Rows}}
+          <tr>{{range .}}<td>{{.}}</td>{{end}}</tr>
+          {{- end}}
+        </tbody>
+      </table>
+      {{- end}}
+      {{- end}}
+      {{- with .Error}}
+      <div class="error">Lookup error: {{.}}</div>
+      {{- end}}
+
+      <h3>Checks</h3>
+      <ul class="checks">
+        {{- range .Results}}
+        <li class="{{.Status}}">
+          {{- if eq (print .Status) "pass"}}
+          <details>
+            <summary class="check">
+              <span class="icon">{{icon .Status}}</span>
+              <span class="check-body"><span class="title">{{.Description}}</span></span>
+              <span class="rule-id">#{{.RuleID}}</span>
+            </summary>
+            <div class="message detail">{{.Message}}</div>
+          </details>
+          {{- else}}
+          <div class="check">
+            <span class="icon">{{icon .Status}}</span>
+            <div class="check-body">
+              <div class="title">{{.Description}}</div>
+              <div class="message">{{.Message}}</div>
+            </div>
+            <span class="rule-id">#{{.RuleID}}</span>
+          </div>
+          {{- end}}
+        </li>
+        {{- end}}
+      </ul>
+    </section>
+  {{- end}}
+  </div>
+
+  <footer>
+    Generated by <a href="https://github.com/sbroekhoven/check-maildomain">check-maildomain</a> {{.Version}}
+  </footer>
+</main>
+<script>window.addEventListener("beforeprint", () => document.querySelectorAll("details").forEach(d => d.open = true));</script>
+</body>
+</html>

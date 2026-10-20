@@ -7,6 +7,9 @@ import (
 
 // CheckDKIMExists attempts to verify if DKIM records might exist for the domain
 func CheckDKIMExists(info *EnhancedDomainInfo) {
+	if info.addIfLookupFailed(7, AreaDKIM, "dkim") {
+		return
+	}
 	switch {
 	case info.DKIMInfo == nil:
 		info.add(7, AreaDKIM, "Status unknown", StatusInfo,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ var (
 // Exit codes
 const (
 	exitOK    = 0
-	exitError = 1 // usage or runtime error
+	exitError = 1 // usage or runtime error, or a DNS lookup failed so the results are incomplete
 	exitFail  = 2 // at least one rule failed
 )
 
@@ -41,6 +42,7 @@ func run() int {
 	timeout := flag.Duration("timeout", 3*time.Second, "timeout per DNS query")
 	jsonOutput := flag.Bool("json", false, "output as JSON")
 	outputFolder := flag.String("output", "", "folder to save JSON output files (implies -json)")
+	htmlFile := flag.String("html", "", "write an HTML report to this file (- for stdout)")
 	verbose := flag.Bool("v", false, "show details of passing checks too")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	var selectors []string
@@ -80,7 +82,16 @@ func run() int {
 	rules.ApplyAllRules(enhanced)
 
 	// Output results
-	if *jsonOutput || *outputFolder != "" {
+	if *htmlFile != "" {
+		if err := saveHTML(*htmlFile, enhanced, res.Server); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing HTML report: %v\n", err)
+			return exitError
+		}
+	}
+
+	if *htmlFile == "-" {
+		// The HTML report already went to stdout
+	} else if *jsonOutput || *outputFolder != "" {
 		jsonData, err := json.MarshalIndent(enhanced, "", "  ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error marshaling to JSON: %v\n", err)
@@ -102,6 +113,16 @@ func run() int {
 		newConsole(os.Stdout, *verbose).print(enhanced, res.Server)
 	}
 
+	// Incomplete results take precedence: a failed rule may be caused by the failed lookup
+	if info.HasFailedLookups() {
+		checks := make([]string, 0, len(info.Failed))
+		for check := range info.Failed {
+			checks = append(checks, check)
+		}
+		sort.Strings(checks)
+		fmt.Fprintf(os.Stderr, "Warning: DNS lookups failed for %s; results are incomplete\n", strings.Join(checks, ", "))
+		return exitError
+	}
 	if enhanced.HasStatus(rules.StatusFail) {
 		return exitFail
 	}
@@ -119,6 +140,27 @@ func normalizeDomain(domain string) (string, error) {
 		return "", fmt.Errorf("not a fully qualified domain name")
 	}
 	return ascii, nil
+}
+
+// saveHTML writes the HTML report to filename, or to stdout when filename is "-"
+func saveHTML(filename string, e *rules.EnhancedDomainInfo, nameserver string) error {
+	if filename == "-" {
+		return writeHTML(os.Stdout, e, nameserver)
+	}
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	if err := writeHTML(f, e, nameserver); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Report saved to: %s\n", filename)
+	return nil
 }
 
 func saveJSON(folder, domain string, data []byte) (string, error) {

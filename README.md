@@ -83,6 +83,14 @@ MX       !  smtp.google.com (10)
 
 Results are grouped per area: `✓` pass, `!` warning, `✗` fail, `i` info. Details are shown for anything that is not a pass (use `-v` to see them all). Colours are used when writing to a terminal and are turned off when the output is piped or `NO_COLOR` is set. Long lines wrap to `$COLUMNS` (default 100).
 
+## HTML Report
+
+```bash
+check-maildomain -html report.html example.com
+```
+
+Writes a single, self-contained HTML file (inline CSS, no external assets) that you can email, attach to a ticket or archive. It shows an overall verdict, then one card per area with the records that were found (SPF record and lookup count, DMARC tags, DKIM selectors, DNSSEC keys, an MX table with addresses) and all checks. Problems are expanded; passing checks can be clicked open. The report follows the system light/dark theme, works on phones, and prints cleanly. The console output is still printed, unless you use `-html -` to write the report to stdout.
+
 ## Command-line Options
 
 | Flag | Default | Description |
@@ -94,6 +102,7 @@ Results are grouped per area: `✓` pass, `!` warning, `✗` fail, `i` info. Det
 | `-selector` | | Extra DKIM selector to check (repeatable, or comma-separated) |
 | `-v` | `false` | Also show the details of passing checks |
 | `-json` | `false` | Output results as JSON |
+| `-html` | | Write an HTML report to this file (`-` for stdout) |
 | `-output` | | Folder to save JSON results to (implies `-json`) |
 | `-version` | | Print version and exit |
 
@@ -102,8 +111,10 @@ Results are grouped per area: `✓` pass, `!` warning, `✗` fail, `i` info. Det
 | Code | Meaning |
 |------|---------|
 | 0 | No rule failed |
-| 1 | Usage or runtime error |
+| 1 | Usage or runtime error, or a DNS lookup failed so the results are incomplete |
 | 2 | At least one rule failed |
+
+When a lookup fails (for example a timeout), the affected checks are reported as "Could not be checked" (info) instead of as a missing record, the failed lookups are listed in `failed_lookups` in the JSON output, and a warning is printed to stderr. A record that simply does not exist is not a failed lookup and is reported by the normal checks.
 
 ## Rule Checks
 

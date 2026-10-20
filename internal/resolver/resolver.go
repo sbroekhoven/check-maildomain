@@ -26,6 +26,22 @@ func IsNXDomain(err error) bool {
 	return errors.As(err, &rerr) && rerr.Rcode == dns.RcodeNameError
 }
 
+// NotFoundError is returned when a lookup succeeded but the record does not exist
+type NotFoundError struct {
+	What string // kind of record, e.g. "SPF"
+	Name string // name that was queried
+}
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("no %s record found for domain: %s", e.What, e.Name)
+}
+
+// IsNotFound reports whether err means the record does not exist (as opposed to the lookup failing)
+func IsNotFound(err error) bool {
+	var nf *NotFoundError
+	return errors.As(err, &nf) || IsNXDomain(err)
+}
+
 // Resolver sends DNS queries to a single nameserver, with an optional fallback nameserver
 type Resolver struct {
 	Server   string // host:port of the primary nameserver

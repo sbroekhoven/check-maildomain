@@ -330,3 +330,44 @@ func TestApplyAllRulesOrdered(t *testing.T) {
 		t.Error("expected failures for a domain without DMARC")
 	}
 }
+
+func TestFailedLookupsAreUnchecked(t *testing.T) {
+	failed := func(check string) func(*collector.DomainInfo) {
+		return func(d *collector.DomainInfo) {
+			d.Errors[check] = "DNS query failed: i/o timeout"
+			d.Failed[check] = true
+		}
+	}
+	notFound := func(check string) func(*collector.DomainInfo) {
+		return func(d *collector.DomainInfo) {
+			d.Errors[check] = "no record found"
+		}
+	}
+
+	tests := []struct {
+		check  func(*EnhancedDomainInfo)
+		ruleID int
+		key    string
+		absent Status // status when the record simply does not exist
+	}{
+		{CheckSPFExists, 6, "spf", StatusFail},
+		{CheckDMARCExists, 5, "dmarc", StatusFail},
+		{CheckMXExists, 9, "mx", StatusWarn},
+		{CheckDKIMExists, 7, "dkim", StatusInfo},
+		{CheckDNSSECEnabled, 8, "dnssec", StatusInfo},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			info := newInfo(failed(tt.key))
+			if got := statusOf(t, tt.check, info, tt.ruleID); got != StatusInfo {
+				t.Errorf("failed lookup: status = %q, want info", got)
+			}
+			if got := info.RuleResults[0].Description; got != "Could not be checked" {
+				t.Errorf("failed lookup: description = %q", got)
+			}
+			if got := statusOf(t, tt.check, newInfo(notFound(tt.key)), tt.ruleID); got != tt.absent {
+				t.Errorf("record not found: status = %q, want %q", got, tt.absent)
+			}
+		})
+	}
+}

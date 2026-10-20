@@ -81,6 +81,9 @@ func CheckSPFAllMechanism(info *EnhancedDomainInfo) {
 
 // CheckSPFExists verifies that an SPF record exists for the domain
 func CheckSPFExists(info *EnhancedDomainInfo) {
+	if info.addIfLookupFailed(6, AreaSPF, "spf") {
+		return
+	}
 	if info.SPFRecord == nil {
 		info.add(6, AreaSPF, "No SPF record", StatusFail,
 			"No SPF record was found for this domain. SPF is important for preventing email spoofing. Add an SPF record to specify which servers are authorized to send email for your domain.")

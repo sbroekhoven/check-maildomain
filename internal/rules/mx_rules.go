@@ -32,6 +32,9 @@ func addresses(record mx.MXRecord) []net.IP {
 
 // CheckMXExists verifies that MX records exist for the domain
 func CheckMXExists(info *EnhancedDomainInfo) {
+	if info.addIfLookupFailed(9, AreaMX, "mx") {
+		return
+	}
 	switch {
 	case mx.IsNullMX(info.MXRecords):
 		info.add(9, AreaMX, "Null MX: accepts no mail", StatusInfo,

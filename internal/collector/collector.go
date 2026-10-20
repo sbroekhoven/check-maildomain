@@ -22,7 +22,8 @@ type DomainInfo struct {
 	DMARCPolicy dmarc.DMARCPolicy  `json:"dmarc_policy"`
 	DNSSECInfo  *dnssec.DNSSECInfo `json:"dnssec_info"`
 	DKIMInfo    *dkim.DKIMInfo     `json:"dkim_info"`
-	Errors      map[string]string  `json:"errors,omitempty"`
+	Errors      map[string]string  `json:"errors,omitempty"`         // Lookup errors per check, including "record not found"
+	Failed      map[string]bool    `json:"failed_lookups,omitempty"` // Checks whose lookup failed, so their result is unknown
 
 	mu sync.Mutex
 }
@@ -38,6 +39,7 @@ func NewDomainInfo(domain string) *DomainInfo {
 		Domain:    domain,
 		QueryTime: time.Now(),
 		Errors:    make(map[string]string),
+		Failed:    make(map[string]bool),
 	}
 }
 
@@ -54,6 +56,9 @@ func CollectDNSInfo(domain string, res *resolver.Resolver, opts Options) *Domain
 			if err := lookup(); err != nil {
 				info.mu.Lock()
 				info.Errors[name] = err.Error()
+				if !resolver.IsNotFound(err) {
+					info.Failed[name] = true
+				}
 				info.mu.Unlock()
 			}
 		}()
@@ -90,4 +95,17 @@ func CollectDNSInfo(domain string, res *resolver.Resolver, opts Options) *Domain
 // HasErrors returns true if any errors were encountered during collection
 func (di *DomainInfo) HasErrors() bool {
 	return len(di.Errors) > 0
+}
+
+// HasFailedLookups returns true if any lookup failed, so the results are incomplete
+func (di *DomainInfo) HasFailedLookups() bool {
+	return len(di.Failed) > 0
+}
+
+// LookupFailure returns the error of a failed lookup for a check ("spf", "mx", ...), if it failed
+func (di *DomainInfo) LookupFailure(check string) (string, bool) {
+	if !di.Failed[check] {
+		return "", false
+	}
+	return di.Errors[check], true
 }

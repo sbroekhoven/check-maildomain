@@ -102,17 +102,29 @@ func (c *console) print(e *rules.EnhancedDomainInfo, nameserver string) {
 	c.printSummary(e.RuleResults)
 }
 
-func (c *console) printArea(e *rules.EnhancedDomainInfo, area rules.Area) {
-	var results []rules.RuleResult
+// areaResults returns the results of one area and the worst status among them
+func areaResults(results []rules.RuleResult, area rules.Area) ([]rules.RuleResult, rules.Status) {
+	var matching []rules.RuleResult
 	worst := rules.StatusPass
-	for _, r := range e.RuleResults {
+	for _, r := range results {
 		if r.Area == area {
-			results = append(results, r)
-			if severity(r.Status) > severity(worst) {
-				worst = r.Status
-			}
+			matching = append(matching, r)
+			worst = worstStatus(worst, r.Status)
 		}
 	}
+	return matching, worst
+}
+
+// worstStatus returns the more severe of two statuses
+func worstStatus(a, b rules.Status) rules.Status {
+	if severity(b) > severity(a) {
+		return b
+	}
+	return a
+}
+
+func (c *console) printArea(e *rules.EnhancedDomainInfo, area rules.Area) {
+	results, worst := areaResults(e.RuleResults, area)
 
 	label := c.paint(styleBold, fmt.Sprintf("%-*s", labelWidth, area))
 
@@ -178,7 +190,7 @@ func (c *console) printSummary(results []rules.RuleResult) {
 // areaSummary is the one-line description of what was found for an area
 func areaSummary(e *rules.EnhancedDomainInfo, area rules.Area) string {
 	lookupError := func(key, fallback string) string {
-		if err, ok := e.Errors[key]; ok {
+		if err, failed := e.LookupFailure(key); failed {
 			return err
 		}
 		return fallback
