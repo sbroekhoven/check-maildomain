@@ -12,92 +12,107 @@ This tool checks a domain's DNS records related to email security, including:
 - DNSSEC (Domain Name System Security Extensions)
 - MX (Mail Exchange) records
 
-It evaluates these configurations against a comprehensive set of rules and provides detailed results about potential issues and recommendations.
+It evaluates these configurations against a set of rules and reports each finding as pass, warn, fail or info.
 
 ## Features
 
-- Analyzes SPF record configuration and syntax
-- Checks DMARC policy strength
-- Verifies DKIM record existence
-- Validates DNSSEC configuration
-- Examines MX record configuration for redundancy and proper setup
-- Detects common misconfigurations like private IPs or localhost in MX records
-- Provides detailed output in JSON format
+- Analyzes SPF syntax, the `all` qualifier, and the RFC 7208 limit of 10 DNS lookups (following nested includes)
+- Checks DMARC syntax, policy strength, `pct`, reporting and subdomain policy, with organizational-domain fallback
+- Detects DKIM keys under common selectors and selectors you supply
+- Validates the DNSSEC chain (DNSKEY + DS) and signature expiry
+- Examines MX records for redundancy, null MX, CNAME targets, IPv6, and private or loopback addresses
+- Console or JSON output; exit code reflects failures, so it can run in CI
 
 ## Installation
 
 ```bash
-# Clone the repository
+go install github.com/sbroekhoven/check-maildomain@latest
+```
+
+Or download a binary from the [releases page](https://github.com/sbroekhoven/check-maildomain/releases), or build from source:
+
+```bash
 git clone https://github.com/sbroekhoven/check-maildomain.git
 cd check-maildomain
-
-# Build the application
 go build -o check-maildomain
 ```
 
 ## Usage
 
 ```bash
-# Basic usage with default values
-./check-maildomain
+# Check a domain
+check-maildomain example.com
 
-# Specify a domain to check
-./check-maildomain -domain example.com
+# Use a specific nameserver (IPv4, IPv6, optional port)
+check-maildomain -nameserver 1.1.1.1 example.com
+check-maildomain -nameserver "[2606:4700:4700::1111]:53" example.com
 
-# Use a specific DNS nameserver
-./check-maildomain -domain example.com -nameserver 1.1.1.1
+# Also check your own DKIM selectors
+check-maildomain -selector s2024 -selector mailjet example.com
 
-# Disable JSON output
-./check-maildomain -domain example.com -json=false
+# JSON output, optionally also saved to a folder
+check-maildomain -json example.com | jq .
+check-maildomain -output results example.com
 ```
 
 ## Command-line Options
 
-- `-domain`: Domain to check (default: "suspiciousbytes.com")
-- `-nameserver`: DNS nameserver to use for lookups (default: "8.8.8.8")
-- `-json`: Output results in JSON format (default: true)
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-domain` | | Domain to check (alternatively the first argument) |
+| `-nameserver` | `8.8.8.8` | Nameserver for lookups, optionally with port |
+| `-fallback` | | Nameserver to use when the primary does not respond |
+| `-timeout` | `3s` | Timeout per DNS query |
+| `-selector` | | Extra DKIM selector to check (repeatable, or comma-separated) |
+| `-json` | `false` | Output results as JSON |
+| `-output` | | Folder to save JSON results to (implies `-json`) |
+| `-version` | | Print version and exit |
 
-Other output will be added later. Think about console readable, or HTML file.
+## Exit Codes
 
-## Output
-
-The tool outputs a JSON structure containing:
-- Domain information
-- DNS records found
-- Rule check results with status (pass/warn/fail/info)
-- Detailed messages explaining each finding
+| Code | Meaning |
+|------|---------|
+| 0 | No rule failed |
+| 1 | Usage or runtime error |
+| 2 | At least one rule failed |
 
 ## Rule Checks
 
-The tool performs the following checks:
+| ID | Area | Check |
+|----|------|-------|
+| 1 | SPF | No deprecated `ptr` mechanism |
+| 2 | SPF | At most 10 DNS lookups, including nested includes and redirects |
+| 3 | SPF | Ends with `-all` or `~all` (not `+all` / `?all`) |
+| 4 | DMARC | Policy strength (reject / quarantine / none) |
+| 5 | DMARC | Record exists (own or organizational domain) |
+| 6 | SPF | Record exists |
+| 7 | DKIM | Keys found under common or supplied selectors |
+| 8 | DNSSEC | Zone signed and DS published at parent |
+| 9 | MX | Records exist (null MX reported as info) |
+| 10 | MX | Hosts resolve to IP addresses |
+| 11 | MX | Hosts have IPv6 addresses |
+| 12 | MX | More than one MX for redundancy |
+| 13 | MX | Not more than 5 MX records |
+| 14 | MX | No localhost / loopback targets |
+| 15 | MX | No private or link-local addresses |
+| 16 | SPF | Only one SPF record published |
+| 17 | DMARC | Record syntax is valid |
+| 18 | DMARC | Policy applies to 100% of mail (`pct`) |
+| 19 | DMARC | Aggregate reporting (`rua`) configured |
+| 20 | DMARC | Subdomain policy is not `none` |
+| 21 | DNSSEC | DNSKEY signatures not (nearly) expired |
+| 22 | MX | MX hosts are not CNAMEs |
 
-### SPF Checks
-- SPF record existence
-- Proper use of the `all` qualifier
-- Detection of deprecated `ptr:` mechanism
-- Limit on `include:` mechanisms
+## Development
 
-### DMARC Checks
-- DMARC record existence
-- DMARC policy strength (reject/quarantine/none)
-
-### DKIM Checks
-- DKIM record existence
-- Detection of common DKIM selectors
-
-### MX Checks
-- MX record existence
-- MX record redundancy
-- IPv6 support
-- Private IP detection
-- Localhost detection
-
-### DNSSEC Checks
-- DNSSEC enablement status
+```bash
+go vet ./...
+go test ./...
+```
 
 ## License
 
-Good question?
+MIT, see [LICENSE](LICENSE).
 
 ## Contributing
 

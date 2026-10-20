@@ -7,43 +7,19 @@ import (
 
 // CheckDKIMExists attempts to verify if DKIM records might exist for the domain
 func CheckDKIMExists(info *EnhancedDomainInfo) {
-	if info.DKIMInfo == nil {
-		// No DKIM info available
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      7,
-			Description: "DKIM record existence",
-			Status:      "info",
-			Message:     "DKIM status could not be determined. DKIM uses selectors that vary by email provider. Ensure DKIM is configured with your email service provider.",
-		})
-		return
-	}
-
-	if info.DKIMInfo.HasDomainKey && info.DKIMInfo.ResponseCode == "NOERROR" {
-		// _domainkey record exists
-		if info.DKIMInfo.HasSelectors {
-			// Found actual DKIM selectors
-			info.RuleResults = append(info.RuleResults, RuleResult{
-				RuleID:      7,
-				Description: "DKIM record existence",
-				Status:      "pass",
-				Message:     fmt.Sprintf("DKIM records found for this domain with selectors: %s", strings.Join(info.DKIMInfo.Selectors, ", ")),
-			})
-		} else {
-			// _domainkey exists but no selectors found
-			info.RuleResults = append(info.RuleResults, RuleResult{
-				RuleID:      7,
-				Description: "DKIM record existence",
-				Status:      "warn",
-				Message:     "Domain has _domainkey record but no common selectors were found. Ensure DKIM is properly configured with your email provider.",
-			})
-		}
-	} else {
-		// No _domainkey record found
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      7,
-			Description: "DKIM record existence",
-			Status:      "fail",
-			Message:     "No DKIM _domainkey record was found. DKIM helps prevent email spoofing. Configure DKIM with your email service provider.",
-		})
+	switch {
+	case info.DKIMInfo == nil:
+		info.add(7, "DKIM record existence", StatusInfo,
+			"DKIM status could not be determined. DKIM uses selectors that vary by email provider. Ensure DKIM is configured with your email service provider.")
+	case info.DKIMInfo.HasSelectors:
+		info.add(7, "DKIM record existence", StatusPass,
+			fmt.Sprintf("DKIM keys found for this domain with selectors: %s", strings.Join(info.DKIMInfo.Selectors, ", ")))
+	case info.DKIMInfo.HasDomainKey:
+		info.add(7, "DKIM record existence", StatusWarn,
+			"The _domainkey name exists but no DKIM key was found under the common selectors. Selectors are provider-specific; check yours with -selector.")
+	default:
+		info.add(7, "DKIM record existence", StatusFail,
+			fmt.Sprintf("_domainkey.%s does not exist (%s), so no DKIM keys are published. DKIM helps prevent email spoofing. Configure DKIM with your email service provider.",
+				info.Domain, info.DKIMInfo.ResponseCode))
 	}
 }

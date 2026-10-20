@@ -1,20 +1,20 @@
 package dkim
 
 import (
-	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
+	"github.com/sbroekhoven/check-maildomain/internal/resolver"
 )
 
 // DKIMInfo contains information about DKIM configuration for a domain
 type DKIMInfo struct {
-	Domain       string   // Domain that was checked
-	HasDomainKey bool     // Whether _domainkey record exists
-	HasSelectors bool     // Whether any selectors were found
-	Selectors    []string // List of discovered selectors
-	ResponseCode string   // DNS response code (NOERROR, NXDOMAIN, etc.)
-	Error        string   // Any error encountered during the check
+	Domain       string   `json:"domain"`        // Domain that was checked
+	HasDomainKey bool     `json:"has_domainkey"` // Whether the _domainkey name exists
+	HasSelectors bool     `json:"has_selectors"` // Whether any selectors were found
+	Selectors    []string `json:"selectors"`     // List of discovered selectors
+	ResponseCode string   `json:"response_code"` // DNS response code for _domainkey (NOERROR, NXDOMAIN, etc.)
 }
 
 // CommonSelectors is a list of commonly used DKIM selector names to check
@@ -23,55 +23,47 @@ var CommonSelectors = []string{
 	"google", "zoho", "mx", "key", "mta", "pm", "dkim-smtp", "s1", "s2",
 }
 
-// CheckDKIM checks if a domain has DKIM configured by looking for _domainkey record
-func CheckDKIM(domain string, nameserver string) (*DKIMInfo, error) {
-	if !strings.HasSuffix(nameserver, ":53") {
-		nameserver = nameserver + ":53"
-	}
-
+// CheckDKIM checks if a domain has DKIM configured by probing the _domainkey name and a set of
+// selectors: the common ones plus any extra selectors given by the caller
+func CheckDKIM(domain string, res *resolver.Resolver, extraSelectors []string) (*DKIMInfo, error) {
 	info := &DKIMInfo{
-		Domain:       domain,
-		HasDomainKey: false,
-		HasSelectors: false,
-		Selectors:    []string{},
+		Domain:    domain,
+		Selectors: []string{},
 	}
 
-	c := dns.Client{}
-	m := dns.Msg{}
-
-	// Check if _domainkey record exists
-	domainKeyName := "_domainkey." + domain
-	m.SetQuestion(dns.Fqdn(domainKeyName), dns.TypeTXT)
-	m.RecursionDesired = true
-
-	r, _, err := c.Exchange(&m, nameserver)
-	if err != nil {
-		info.Error = fmt.Sprintf("DNS query failed: %v", err)
-		return info, err
+	// Check if _domainkey name exists; NXDOMAIN means nothing exists below it (RFC 8020)
+	r, err := res.Query("_domainkey."+domain, dns.TypeTXT, false)
+	if r == nil {
+		return nil, err
 	}
-
-	// Store the response code
 	info.ResponseCode = dns.RcodeToString[r.Rcode]
+	info.HasDomainKey = r.Rcode == dns.RcodeSuccess
 
-	// If response code is NOERROR, _domainkey record likely exists
-	if r.Rcode == dns.RcodeSuccess {
-		info.HasDomainKey = true
+	selectors := uniqueSelectors(extraSelectors, CommonSelectors)
+	found := make([]bool, len(selectors))
+
+	// Probe all selectors concurrently
+	var wg sync.WaitGroup
+	for i, selector := range selectors {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			txts, err := res.TXT(selector + "._domainkey." + domain)
+			if err != nil {
+				return
+			}
+			for _, txt := range txts {
+				if IsDKIMKey(txt) {
+					found[i] = true
+					return
+				}
+			}
+		}()
 	}
+	wg.Wait()
 
-	// Try to find some common selectors
-	for _, selector := range CommonSelectors {
-		selectorName := fmt.Sprintf("%s._domainkey.%s", selector, domain)
-		m := dns.Msg{}
-		m.SetQuestion(dns.Fqdn(selectorName), dns.TypeTXT)
-		m.RecursionDesired = true
-
-		r, _, err := c.Exchange(&m, nameserver)
-		if err != nil {
-			continue
-		}
-
-		// If we get a successful response and have answers, this selector exists
-		if r.Rcode == dns.RcodeSuccess && len(r.Answer) > 0 {
+	for i, selector := range selectors {
+		if found[i] {
 			info.HasSelectors = true
 			info.Selectors = append(info.Selectors, selector)
 		}
@@ -80,13 +72,37 @@ func CheckDKIM(domain string, nameserver string) (*DKIMInfo, error) {
 	return info, nil
 }
 
-// CheckDKIMWithFallback tries to use the specified nameserver, but falls back to 8.8.4.4 if that fails
-func CheckDKIMWithFallback(domain string, nameserver string) (*DKIMInfo, error) {
-	info, err := CheckDKIM(domain, nameserver)
-	if err == nil {
-		return info, nil
+// IsDKIMKey reports whether a TXT value looks like a DKIM key record (RFC 6376 3.6.1)
+func IsDKIMKey(txt string) bool {
+	hasKey := false
+	for i, part := range strings.Split(txt, ";") {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(kv[0])
+		value := strings.TrimSpace(kv[1])
+		switch {
+		case key == "v" && (i != 0 || value != "DKIM1"):
+			return false
+		case key == "p":
+			hasKey = true
+		}
 	}
+	return hasKey
+}
 
-	// Fallback to Google DNS
-	return CheckDKIM(domain, "8.8.4.4:53")
+func uniqueSelectors(lists ...[]string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, list := range lists {
+		for _, s := range list {
+			s = strings.ToLower(strings.TrimSpace(s))
+			if s != "" && !seen[s] {
+				seen[s] = true
+				result = append(result, s)
+			}
+		}
+	}
+	return result
 }

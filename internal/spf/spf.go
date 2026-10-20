@@ -2,97 +2,218 @@ package spf
 
 import (
 	"fmt"
-	"net"
 	"strings"
 
-	"github.com/miekg/dns"
+	"github.com/sbroekhoven/check-maildomain/internal/resolver"
 )
+
+// MaxDNSLookups is the RFC 7208 limit on DNS-querying terms during SPF evaluation
+const MaxDNSLookups = 10
 
 // SPFRecord represents an SPF record with its parsed value
 type SPFRecord struct {
-	Raw     string   // The complete raw TXT record
-	Version string   // Should be "spf1"
-	Terms   []string // The individual mechanisms and modifiers
+	Raw          string   `json:"raw"`                     // The complete raw TXT record
+	Version      string   `json:"version"`                 // Should be "spf1"
+	Terms        []string `json:"terms"`                   // The individual mechanisms and modifiers
+	RecordCount  int      `json:"record_count"`            // Number of v=spf1 records published (must be 1)
+	LookupCount  int      `json:"lookup_count"`            // DNS lookups needed to evaluate, including nested includes
+	LookupErrors []string `json:"lookup_errors,omitempty"` // Problems found while following include/redirect
 }
 
-// LookupSPF looks up SPF records for the specified domain using the given nameserver
-func LookupSPF(domain string, nameserver string) (*SPFRecord, error) {
-	if !strings.HasSuffix(nameserver, ":53") {
-		nameserver = nameserver + ":53"
+// Term is a single parsed SPF mechanism or modifier
+type Term struct {
+	Qualifier byte   // '+', '-', '~' or '?' for mechanisms, 0 for modifiers
+	Name      string // Mechanism or modifier name, lowercased (e.g. "include", "all", "redirect")
+	Value     string // Everything after ':' or '=' (domain-spec, IP, ...)
+	Modifier  bool   // true for name=value modifiers
+}
+
+// ParseTerm parses a single SPF term such as "~all", "include:_spf.google.com" or "redirect=example.com"
+func ParseTerm(raw string) Term {
+	t := Term{Qualifier: '+'}
+	if raw != "" && strings.ContainsRune("+-~?", rune(raw[0])) {
+		t.Qualifier = raw[0]
+		raw = raw[1:]
 	}
 
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeTXT)
-	m.MsgHdr.RecursionDesired = true
-	c := new(dns.Client)
-
-	in, _, err := c.Exchange(m, nameserver)
-	if err != nil {
-		return nil, fmt.Errorf("DNS query failed: %v", err)
+	if i := strings.IndexAny(raw, ":=/"); i >= 0 {
+		t.Name = strings.ToLower(raw[:i])
+		if raw[i] == '=' {
+			t.Modifier = true
+			t.Qualifier = 0
+		}
+		if raw[i] != '/' {
+			t.Value = raw[i+1:]
+		}
+	} else {
+		t.Name = strings.ToLower(raw)
 	}
+	return t
+}
 
-	if in.Rcode != dns.RcodeSuccess {
-		return nil, fmt.Errorf("DNS query returned non-success code: %v", dns.RcodeToString[in.Rcode])
+// Parse parses a raw "v=spf1 ..." TXT value
+func Parse(raw string) *SPFRecord {
+	fields := strings.Fields(raw)
+	record := &SPFRecord{Raw: raw, Terms: []string{}, RecordCount: 1}
+	if len(fields) > 0 {
+		record.Version = strings.TrimPrefix(strings.ToLower(fields[0]), "v=")
+		record.Terms = fields[1:]
 	}
+	return record
+}
 
-	// Look for SPF record in TXT records
-	for _, ain := range in.Answer {
-		if a, ok := ain.(*dns.TXT); ok {
+// IsSPF reports whether a TXT value is an SPF record
+func IsSPF(txt string) bool {
+	lower := strings.ToLower(txt)
+	return lower == "v=spf1" || strings.HasPrefix(lower, "v=spf1 ")
+}
 
-			// Join TXT chunks into single string
-			txtValue := strings.Join(a.Txt, "")
-
-			// Check if this is an SPF record
-			if strings.HasPrefix(strings.ToLower(txtValue), "v=spf1") {
-				// Parse the SPF record
-				terms := strings.Fields(txtValue)
-				return &SPFRecord{
-					Raw:     txtValue,
-					Version: strings.TrimPrefix(terms[0], "v="),
-					Terms:   terms[1:],
-				}, nil
+// findSPF returns the first SPF record among TXT values and how many SPF records there are
+func findSPF(txts []string) (*SPFRecord, int) {
+	var record *SPFRecord
+	count := 0
+	for _, txt := range txts {
+		if IsSPF(txt) {
+			count++
+			if record == nil {
+				record = Parse(txt)
 			}
 		}
 	}
-
-	return nil, fmt.Errorf("no SPF record found for domain: %s", domain)
+	return record, count
 }
 
-// LookupSPFWithFallback tries to use the specified nameserver, but falls back to the system resolver if that fails
-func LookupSPFWithFallback(domain string, nameserver string) (*SPFRecord, error) {
-	record, err := LookupSPF(domain, nameserver)
-	if err == nil {
-		return record, nil
-	}
-	println(err.Error())
+// TXTLookup returns the TXT records for a domain
+type TXTLookup func(domain string) ([]string, error)
 
-	// Fallback to standard library
-	txtRecords, err := net.LookupTXT(domain)
+// LookupSPF looks up and parses the SPF record of a domain and counts the DNS lookups it needs
+func LookupSPF(domain string, res *resolver.Resolver) (*SPFRecord, error) {
+	txts, err := res.TXT(domain)
 	if err != nil {
-		println(err.Error())
-		return nil, fmt.Errorf("TXT lookup failed: %v", err)
+		return nil, err
 	}
 
-	// Look for SPF record in TXT records
-	for _, txt := range txtRecords {
-		if strings.HasPrefix(strings.ToLower(txt), "v=spf1") {
-			terms := strings.Fields(txt)
-			return &SPFRecord{
-				Raw:     txt,
-				Version: strings.TrimPrefix(terms[0], "v="),
-				Terms:   terms[1:],
-			}, nil
+	record, count := findSPF(txts)
+	if record == nil {
+		return nil, fmt.Errorf("no SPF record found for domain: %s", domain)
+	}
+	record.RecordCount = count
+	record.LookupCount, record.LookupErrors = CountLookups(domain, record, res.TXT)
+	return record, nil
+}
+
+// CountLookups counts the DNS-querying terms (include, a, mx, ptr, exists, redirect) needed to
+// evaluate an SPF record, following include and redirect targets recursively (RFC 7208 4.6.4).
+// It also returns problems found along the way, such as include loops or unresolvable targets.
+func CountLookups(domain string, record *SPFRecord, lookup TXTLookup) (int, []string) {
+	c := &lookupCounter{
+		lookup: lookup,
+		path:   map[string]bool{strings.ToLower(domain): true},
+	}
+	c.walk(record)
+	return c.count, c.problems
+}
+
+type lookupCounter struct {
+	lookup   TXTLookup
+	path     map[string]bool // domains on the current include chain, to detect loops
+	count    int
+	problems []string
+}
+
+// done reports whether the limit is exceeded far enough that resolving further adds nothing
+func (c *lookupCounter) done() bool {
+	return c.count > 2*MaxDNSLookups
+}
+
+func (c *lookupCounter) walk(record *SPFRecord) {
+	hasAll := record.AllTerm() != nil
+	for _, term := range record.Mechanisms() {
+		if c.done() {
+			return
+		}
+		switch term.Name {
+		case "a", "mx", "ptr", "exists":
+			if !term.Modifier {
+				c.count++
+			}
+		case "include", "redirect":
+			// include is a mechanism, redirect a modifier; redirect is ignored when "all" is present
+			if (term.Name == "redirect") != term.Modifier || term.Name == "redirect" && hasAll {
+				continue
+			}
+			c.count++
+			c.follow(term)
 		}
 	}
+}
 
-	return nil, fmt.Errorf("no SPF record found for domain: %s", domain)
+func (c *lookupCounter) follow(term Term) {
+	target := strings.ToLower(strings.TrimSuffix(term.Value, "."))
+	switch {
+	case target == "":
+		c.problems = append(c.problems, fmt.Sprintf("%s without a domain", term.Name))
+		return
+	case strings.Contains(target, "%"):
+		// Macro targets can only be resolved at evaluation time
+		return
+	case c.path[target]:
+		c.problems = append(c.problems, fmt.Sprintf("%s loop detected at %s", term.Name, target))
+		return
+	}
+
+	txts, err := c.lookup(target)
+	if err != nil {
+		c.problems = append(c.problems, fmt.Sprintf("%s:%s could not be resolved: %v", term.Name, target, err))
+		return
+	}
+	nested, n := findSPF(txts)
+	if nested == nil {
+		c.problems = append(c.problems, fmt.Sprintf("%s:%s has no SPF record", term.Name, target))
+		return
+	}
+	if n > 1 {
+		c.problems = append(c.problems, fmt.Sprintf("%s:%s publishes %d SPF records", term.Name, target, n))
+	}
+
+	c.path[target] = true
+	c.walk(nested)
+	delete(c.path, target)
+}
+
+// Mechanisms returns the parsed terms of the record
+func (r *SPFRecord) Mechanisms() []Term {
+	terms := make([]Term, 0, len(r.Terms))
+	for _, raw := range r.Terms {
+		terms = append(terms, ParseTerm(raw))
+	}
+	return terms
+}
+
+// AllTerm returns the "all" mechanism of the record, or nil if there is none
+func (r *SPFRecord) AllTerm() *Term {
+	for _, term := range r.Mechanisms() {
+		if term.Name == "all" && !term.Modifier {
+			return &term
+		}
+	}
+	return nil
+}
+
+// Redirect returns the redirect= target of the record, or "" if there is none
+func (r *SPFRecord) Redirect() string {
+	for _, term := range r.Mechanisms() {
+		if term.Name == "redirect" && term.Modifier {
+			return term.Value
+		}
+	}
+	return ""
 }
 
 // HasInclude checks if the SPF record includes the specified domain
 func (r *SPFRecord) HasInclude(domain string) bool {
-	includePrefix := "include:" + domain
-	for _, term := range r.Terms {
-		if term == includePrefix || strings.HasPrefix(term, includePrefix+"/") {
+	for _, term := range r.Mechanisms() {
+		if term.Name == "include" && !term.Modifier && strings.EqualFold(term.Value, domain) {
 			return true
 		}
 	}
@@ -101,10 +222,11 @@ func (r *SPFRecord) HasInclude(domain string) bool {
 
 // HasIP checks if the SPF record includes the specified IP
 func (r *SPFRecord) HasIP(ip string) bool {
-	ipPrefix := "ip4:" + ip
-	for _, term := range r.Terms {
-		if term == ipPrefix || strings.HasPrefix(term, ipPrefix+"/") {
-			return true
+	for _, term := range r.Mechanisms() {
+		if term.Name == "ip4" || term.Name == "ip6" {
+			if term.Value == ip || strings.HasPrefix(term.Value, ip+"/") {
+				return true
+			}
 		}
 	}
 	return false

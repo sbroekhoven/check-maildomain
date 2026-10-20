@@ -1,98 +1,66 @@
 package dnssec
 
 import (
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/sbroekhoven/check-maildomain/internal/resolver"
 )
 
 // DNSSECInfo contains basic DNSSEC information for a domain
 type DNSSECInfo struct {
-	Domain           string    // The domain name that was checked
-	Enabled          bool      // Whether DNSSEC is enabled
-	HasDNSKEY        bool      // Whether DNSKEY records were found
-	HasDS            bool      // Whether DS records were found
-	KeyCount         int       // Number of DNSKEY records found
-	Algorithm        []int     // DNSSEC algorithms in use
-	KeyTags          []uint16  // Key tags of the keys
-	LastSignatureExp time.Time // Expiration time of the most recent signature
-	Error            string    // Any error encountered during the check
+	Domain          string    `json:"domain"`           // The domain name that was checked
+	Enabled         bool      `json:"enabled"`          // Whether the zone is signed and delegated securely (DNSKEY + DS)
+	HasDNSKEY       bool      `json:"has_dnskey"`       // Whether DNSKEY records were found
+	HasDS           bool      `json:"has_ds"`           // Whether DS records were found in the parent zone
+	KeyCount        int       `json:"key_count"`        // Number of DNSKEY records found
+	Algorithm       []int     `json:"algorithm"`        // DNSSEC algorithms in use
+	KeyTags         []uint16  `json:"key_tags"`         // Key tags of the keys
+	SignatureExpiry time.Time `json:"signature_expiry"` // Earliest expiration of the DNSKEY RRset signatures
 }
 
-// CheckDNSSEC retrieves DNSSEC information for a domain using the specified nameserver
-func CheckDNSSEC(domain string, nameserver string) (*DNSSECInfo, error) {
-	if !strings.HasSuffix(nameserver, ":53") {
-		nameserver = nameserver + ":53"
-	}
-
+// CheckDNSSEC retrieves DNSSEC information for a domain
+func CheckDNSSEC(domain string, res *resolver.Resolver) (*DNSSECInfo, error) {
 	info := &DNSSECInfo{
 		Domain:    domain,
-		Enabled:   false,
 		Algorithm: []int{},
 		KeyTags:   []uint16{},
 	}
 
 	// Check for DNSKEY records
-	c := dns.Client{}
-	m := dns.Msg{}
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeDNSKEY)
-	m.SetEdns0(4096, true)
-	m.RecursionDesired = true
-
-	r, _, err := c.Exchange(&m, nameserver)
+	r, err := res.Query(domain, dns.TypeDNSKEY, true)
 	if err != nil {
-		info.Error = fmt.Sprintf("DNS query failed: %v", err)
-		return info, err
+		return nil, err
 	}
 
-	// Process DNSKEY records
 	for _, ans := range r.Answer {
-		if dnskey, ok := ans.(*dns.DNSKEY); ok {
+		switch rr := ans.(type) {
+		case *dns.DNSKEY:
 			info.HasDNSKEY = true
-			info.Enabled = true
 			info.KeyCount++
-			info.Algorithm = append(info.Algorithm, int(dnskey.Algorithm))
-			info.KeyTags = append(info.KeyTags, dnskey.KeyTag())
-		}
-
-		// Check for signature expiration
-		if rrsig, ok := ans.(*dns.RRSIG); ok {
-			expiration := time.Unix(int64(rrsig.Expiration), 0)
-			if expiration.After(info.LastSignatureExp) {
-				info.LastSignatureExp = expiration
+			info.Algorithm = append(info.Algorithm, int(rr.Algorithm))
+			info.KeyTags = append(info.KeyTags, rr.KeyTag())
+		case *dns.RRSIG:
+			expiration := time.Unix(int64(rr.Expiration), 0)
+			if info.SignatureExpiry.IsZero() || expiration.Before(info.SignatureExpiry) {
+				info.SignatureExpiry = expiration
 			}
 		}
 	}
 
 	// Check for DS records in the parent zone
-	m = dns.Msg{}
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeDS)
-	m.SetEdns0(4096, true)
-	m.RecursionDesired = true
-
-	r, _, err = c.Exchange(&m, nameserver)
+	r, err = res.Query(domain, dns.TypeDS, true)
 	if err != nil {
-		info.Error = fmt.Sprintf("DS record query failed: %v", err)
-		return info, err
+		return nil, err
 	}
 
-	if len(r.Answer) > 0 {
-		info.HasDS = true
-		info.Enabled = true
+	for _, ans := range r.Answer {
+		if _, ok := ans.(*dns.DS); ok {
+			info.HasDS = true
+			break
+		}
 	}
 
+	info.Enabled = info.HasDNSKEY && info.HasDS
 	return info, nil
-}
-
-// CheckDNSSECWithFallback tries to use the specified nameserver, but falls back to 8.8.4.4 if that fails
-func CheckDNSSECWithFallback(domain string, nameserver string) (*DNSSECInfo, error) {
-	info, err := CheckDNSSEC(domain, nameserver)
-	if err == nil {
-		return info, nil
-	}
-
-	// Fallback to Google DNS
-	return CheckDNSSEC(domain, "8.8.4.4:53")
 }

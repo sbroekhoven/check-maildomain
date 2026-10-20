@@ -1,321 +1,219 @@
 package rules
 
 import (
-	"bytes"
 	"fmt"
 	"net"
 	"strings"
+
+	"github.com/sbroekhoven/check-maildomain/internal/mx"
 )
+
+// mailHosts returns the MX records to run host checks on; none for a missing or null MX
+func mailHosts(info *EnhancedDomainInfo) []mx.MXRecord {
+	if mx.IsNullMX(info.MXRecords) {
+		return nil
+	}
+	return info.MXRecords
+}
+
+// addresses returns the parsed A/AAAA addresses of an MX host
+func addresses(record mx.MXRecord) []net.IP {
+	var ips []net.IP
+	for _, r := range record.Records {
+		if r.Type != "A" && r.Type != "AAAA" {
+			continue
+		}
+		if ip := net.ParseIP(r.Value); ip != nil {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
 
 // CheckMXExists verifies that MX records exist for the domain
 func CheckMXExists(info *EnhancedDomainInfo) {
-	if len(info.MXRecords) == 0 {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      9,
-			Description: "MX record existence",
-			Status:      "warn",
-			Message:     "No MX records found. If this domain is used for email, add MX records to specify mail servers.",
-		})
-	} else {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      9,
-			Description: "MX record existence",
-			Status:      "pass",
-			Message:     fmt.Sprintf("Found %d MX records for this domain.", len(info.MXRecords)),
-		})
+	switch {
+	case mx.IsNullMX(info.MXRecords):
+		info.add(9, "MX record existence", StatusInfo,
+			"Domain publishes a null MX (RFC 7505): it explicitly accepts no email.")
+	case len(info.MXRecords) == 0:
+		info.add(9, "MX record existence", StatusWarn,
+			"No MX records found. If this domain is used for email, add MX records to specify mail servers. If it never receives mail, publish a null MX (\"MX 0 .\").")
+	default:
+		info.add(9, "MX record existence", StatusPass,
+			fmt.Sprintf("Found %d MX records for this domain.", len(info.MXRecords)))
 	}
 }
 
 // CheckMXHasIPs verifies that each MX record has at least one IP address
 func CheckMXHasIPs(info *EnhancedDomainInfo) {
-	if len(info.MXRecords) == 0 {
-		// No MX records to check
+	hosts := mailHosts(info)
+	if len(hosts) == 0 {
 		return
 	}
 
 	badMXHosts := []string{}
-	for _, record := range info.MXRecords {
-		if len(record.Records) == 0 {
+	for _, record := range hosts {
+		if len(addresses(record)) == 0 {
 			badMXHosts = append(badMXHosts, record.Host)
 		}
 	}
 
 	if len(badMXHosts) > 0 {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      10,
-			Description: "MX records have IP addresses",
-			Status:      "warn",
-			Message:     fmt.Sprintf("The following MX hosts could not be resolved to IP addresses: %s", strings.Join(badMXHosts, ", ")),
-		})
+		info.add(10, "MX records have IP addresses", StatusWarn,
+			fmt.Sprintf("The following MX hosts could not be resolved to IP addresses: %s", strings.Join(badMXHosts, ", ")))
 	} else {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      10,
-			Description: "MX records have IP addresses",
-			Status:      "pass",
-			Message:     "All MX records resolve to valid IP addresses.",
-		})
+		info.add(10, "MX records have IP addresses", StatusPass, "All MX records resolve to valid IP addresses.")
 	}
 }
 
 // CheckMXHasIPv6 verifies that each MX record has at least one IPv6 address
 func CheckMXHasIPv6(info *EnhancedDomainInfo) {
-	if len(info.MXRecords) == 0 {
-		// No MX records to check
+	hosts := mailHosts(info)
+	if len(hosts) == 0 {
 		return
 	}
 
 	badMXHosts := []string{}
-	for _, record := range info.MXRecords {
+	for _, record := range hosts {
 		hasIPv6 := false
-		for _, r := range record.Records {
-			// Check if this is an IPv6 address (AAAA record)
-			if r.Type == "AAAA" {
+		for _, ip := range addresses(record) {
+			if ip.To4() == nil {
 				hasIPv6 = true
 				break
 			}
 		}
-
 		if !hasIPv6 {
 			badMXHosts = append(badMXHosts, record.Host)
 		}
 	}
 
 	if len(badMXHosts) > 0 {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      11,
-			Description: "MX records have IPv6 addresses",
-			Status:      "warn",
-			Message:     fmt.Sprintf("The following MX hosts could not be resolved to IPv6 addresses: %s", strings.Join(badMXHosts, ", ")),
-		})
+		info.add(11, "MX records have IPv6 addresses", StatusWarn,
+			fmt.Sprintf("The following MX hosts could not be resolved to IPv6 addresses: %s", strings.Join(badMXHosts, ", ")))
 	} else {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      11,
-			Description: "MX records have IPv6 addresses",
-			Status:      "pass",
-			Message:     "All MX records resolve to IPv6 addresses.",
-		})
+		info.add(11, "MX records have IPv6 addresses", StatusPass, "All MX records resolve to IPv6 addresses.")
 	}
 }
 
 // CheckMXRedundancy verifies that more than one MX record exists for redundancy
 func CheckMXRedundancy(info *EnhancedDomainInfo) {
-	if len(info.MXRecords) == 0 {
-		// No MX records to check
+	hosts := mailHosts(info)
+	switch len(hosts) {
+	case 0:
 		return
-	}
-
-	if len(info.MXRecords) == 1 {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      12,
-			Description: "MX record redundancy",
-			Status:      "warn",
-			Message:     "Only one MX record found. For better email reliability, consider adding at least one backup MX server.",
-		})
-	} else {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      12,
-			Description: "MX record redundancy",
-			Status:      "pass",
-			Message:     fmt.Sprintf("Found %d MX records, which provides redundancy for email delivery.", len(info.MXRecords)),
-		})
+	case 1:
+		info.add(12, "MX record redundancy", StatusWarn,
+			"Only one MX record found. For better email reliability, consider adding at least one backup MX server.")
+	default:
+		info.add(12, "MX record redundancy", StatusPass,
+			fmt.Sprintf("Found %d MX records, which provides redundancy for email delivery.", len(hosts)))
 	}
 }
 
 // CheckMXTooMany verifies that there aren't too many MX records which could indicate misconfiguration
 func CheckMXTooMany(info *EnhancedDomainInfo) {
-	if len(info.MXRecords) == 0 {
-		// No MX records to check
+	hosts := mailHosts(info)
+	if len(hosts) == 0 {
 		return
 	}
 
 	// Define the threshold for too many MX records
 	const maxRecommendedMX = 5
 
-	if len(info.MXRecords) > maxRecommendedMX {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      13,
-			Description: "MX record count",
-			Status:      "warn",
-			Message: fmt.Sprintf("Found %d MX records, which is more than the recommended maximum of %d. Too many MX records may indicate a misconfiguration.",
-				len(info.MXRecords), maxRecommendedMX),
-		})
+	if len(hosts) > maxRecommendedMX {
+		info.add(13, "MX record count", StatusWarn,
+			fmt.Sprintf("Found %d MX records, which is more than the recommended maximum of %d. Too many MX records may indicate a misconfiguration.",
+				len(hosts), maxRecommendedMX))
 	} else {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      13,
-			Description: "MX record count",
-			Status:      "pass",
-			Message: fmt.Sprintf("Found %d MX records, which is within the recommended range (1-%d).",
-				len(info.MXRecords), maxRecommendedMX),
-		})
+		info.add(13, "MX record count", StatusPass,
+			fmt.Sprintf("Found %d MX records, which is within the recommended range (1-%d).", len(hosts), maxRecommendedMX))
 	}
 }
 
 // CheckMXLocalhost verifies that MX records don't point to localhost
 func CheckMXLocalhost(info *EnhancedDomainInfo) {
-	if len(info.MXRecords) == 0 {
-		// No MX records to check
+	hosts := mailHosts(info)
+	if len(hosts) == 0 {
 		return
 	}
 
-	localhostPatterns := []string{
-		"localhost",
-		"127.0.0.1",
-		"::1",
-		"0.0.0.0",
-	}
-
 	var badMXs []string
-	for _, mx := range info.MXRecords {
-		// Check the host name itself
-		target := strings.ToLower(mx.Host)
-		isLocalhost := false
-
-		for _, pattern := range localhostPatterns {
-			if target == pattern {
+	for _, record := range hosts {
+		isLocalhost := strings.EqualFold(record.Host, "localhost")
+		for _, ip := range addresses(record) {
+			if ip.IsLoopback() || ip.IsUnspecified() {
 				isLocalhost = true
-				break
 			}
 		}
-
-		// Also check resolved IPs
-		if !isLocalhost {
-			for _, record := range mx.Records {
-				if record.Type == "A" || record.Type == "AAAA" {
-					for _, pattern := range localhostPatterns {
-						if record.Value == pattern {
-							isLocalhost = true
-							break
-						}
-					}
-				}
-				if isLocalhost {
-					break
-				}
-			}
-		}
-
 		if isLocalhost {
-			badMXs = append(badMXs, mx.Host)
+			badMXs = append(badMXs, record.Host)
 		}
 	}
 
 	if len(badMXs) > 0 {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      14,
-			Description: "MX localhost check",
-			Status:      "fail",
-			Message: fmt.Sprintf("Found %d MX records pointing to localhost or loopback addresses: %s. This is a misconfiguration that will prevent email delivery.",
-				len(badMXs), strings.Join(badMXs, ", ")),
-		})
+		info.add(14, "MX localhost check", StatusFail,
+			fmt.Sprintf("Found %d MX records pointing to localhost or loopback addresses: %s. This is a misconfiguration that will prevent email delivery.",
+				len(badMXs), strings.Join(badMXs, ", ")))
 	} else {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      14,
-			Description: "MX localhost check",
-			Status:      "pass",
-			Message:     "No MX records pointing to localhost found.",
-		})
+		info.add(14, "MX localhost check", StatusPass, "No MX records pointing to localhost found.")
 	}
 }
 
 // CheckMXPrivateIPs verifies that MX records don't resolve to private IP addresses
 func CheckMXPrivateIPs(info *EnhancedDomainInfo) {
-	if len(info.MXRecords) == 0 {
-		// No MX records to check
+	hosts := mailHosts(info)
+	if len(hosts) == 0 {
 		return
 	}
 
-	// Map to store MX hosts with private IPs
-	mxWithPrivateIPs := make(map[string][]string)
-
-	for _, mx := range info.MXRecords {
-		// Skip if we couldn't resolve the MX host
-		if len(mx.Records) == 0 {
-			continue
-		}
-
-		// Check each IP address for the MX record
+	var details []string
+	for _, record := range hosts {
 		var privateIPs []string
-		for _, record := range mx.Records {
-			// Only check A and AAAA records
-			if record.Type != "A" && record.Type != "AAAA" {
-				continue
-			}
-
-			// Parse the IP address
-			parsedIP := net.ParseIP(record.Value)
-			if parsedIP == nil {
-				continue
-			}
-
-			// Check if it's a private IP
-			if isPrivateIP(parsedIP) {
-				privateIPs = append(privateIPs, record.Value)
+		for _, ip := range addresses(record) {
+			if isPrivateIP(ip) {
+				privateIPs = append(privateIPs, ip.String())
 			}
 		}
-
-		// If we found private IPs, add them to our map
 		if len(privateIPs) > 0 {
-			mxWithPrivateIPs[mx.Host] = privateIPs
+			details = append(details, fmt.Sprintf("%s resolves to private IPs: %s", record.Host, strings.Join(privateIPs, ", ")))
 		}
 	}
 
-	if len(mxWithPrivateIPs) > 0 {
-		// Format the message with details about which MX records have private IPs
-		var details []string
-		for host, ips := range mxWithPrivateIPs {
-			details = append(details, fmt.Sprintf("%s resolves to private IPs: %s", host, strings.Join(ips, ", ")))
-		}
-
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      15,
-			Description: "MX private IP check",
-			Status:      "fail",
-			Message: fmt.Sprintf("Found %d MX records resolving to private IP addresses. %s",
-				len(mxWithPrivateIPs), strings.Join(details, "; ")),
-		})
+	if len(details) > 0 {
+		info.add(15, "MX private IP check", StatusFail,
+			fmt.Sprintf("Found %d MX records resolving to private IP addresses. %s", len(details), strings.Join(details, "; ")))
 	} else {
-		info.RuleResults = append(info.RuleResults, RuleResult{
-			RuleID:      15,
-			Description: "MX private IP check",
-			Status:      "pass",
-			Message:     "No MX records resolving to private IP addresses found.",
-		})
+		info.add(15, "MX private IP check", StatusPass, "No MX records resolving to private IP addresses found.")
 	}
 }
 
-// isPrivateIP checks if an IP address is in a private range
+// CheckMXCNAME verifies that MX hosts are not aliases (RFC 2181 10.3, RFC 5321 5.1)
+func CheckMXCNAME(info *EnhancedDomainInfo) {
+	hosts := mailHosts(info)
+	if len(hosts) == 0 {
+		return
+	}
+
+	var aliases []string
+	for _, record := range hosts {
+		for _, r := range record.Records {
+			if r.Type == "CNAME" {
+				aliases = append(aliases, fmt.Sprintf("%s -> %s", record.Host, r.Value))
+				break
+			}
+		}
+	}
+
+	if len(aliases) > 0 {
+		info.add(22, "MX hosts are not CNAMEs", StatusWarn,
+			fmt.Sprintf("MX records must point to a host name with A/AAAA records, not to a CNAME: %s", strings.Join(aliases, ", ")))
+	} else {
+		info.add(22, "MX hosts are not CNAMEs", StatusPass, "No MX records point to a CNAME.")
+	}
+}
+
+// isPrivateIP checks if an IP address is in a private, loopback or link-local range
 func isPrivateIP(ip net.IP) bool {
-	// Define private IP ranges
-	privateRanges := []struct {
-		start net.IP
-		end   net.IP
-	}{
-		{net.ParseIP("10.0.0.0"), net.ParseIP("10.255.255.255")},                        // 10.0.0.0/8
-		{net.ParseIP("172.16.0.0"), net.ParseIP("172.31.255.255")},                      // 172.16.0.0/12
-		{net.ParseIP("192.168.0.0"), net.ParseIP("192.168.255.255")},                    // 192.168.0.0/16
-		{net.ParseIP("127.0.0.0"), net.ParseIP("127.255.255.255")},                      // 127.0.0.0/8
-		{net.ParseIP("169.254.0.0"), net.ParseIP("169.254.255.255")},                    // 169.254.0.0/16
-		{net.ParseIP("fc00::"), net.ParseIP("fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")}, // fc00::/7 (ULA)
-		{net.ParseIP("fe80::"), net.ParseIP("febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff")}, // fe80::/10 (link-local)
-	}
-
-	// Check if IP is IPv4 or IPv6
-	if ip.To4() != nil {
-		// IPv4 address
-		ip = ip.To4()
-	}
-
-	// Check each range
-	for _, r := range privateRanges {
-		// Skip IPv6 ranges for IPv4 addresses and vice versa
-		if (ip.To4() == nil) != (r.start.To4() == nil) {
-			continue
-		}
-
-		if bytes.Compare(ip, r.start) >= 0 && bytes.Compare(ip, r.end) <= 0 {
-			return true
-		}
-	}
-
-	return false
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
 }
