@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -42,6 +41,7 @@ func run() int {
 	timeout := flag.Duration("timeout", 3*time.Second, "timeout per DNS query")
 	jsonOutput := flag.Bool("json", false, "output as JSON")
 	outputFolder := flag.String("output", "", "folder to save JSON output files (implies -json)")
+	verbose := flag.Bool("v", false, "show details of passing checks too")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	var selectors []string
 	flag.Func("selector", "extra DKIM selector to check (repeatable)", func(s string) error {
@@ -99,7 +99,7 @@ func run() int {
 
 		fmt.Println(string(jsonData))
 	} else {
-		printEnhancedDomainInfo(enhanced)
+		newConsole(os.Stdout, *verbose).print(enhanced, res.Server)
 	}
 
 	if enhanced.HasStatus(rules.StatusFail) {
@@ -131,82 +131,4 @@ func saveJSON(folder, domain string, data []byte) (string, error) {
 	timestamp := time.Now().Format("20060102150405") // YYYYMMDDHHmmss
 	filename := filepath.Join(folder, fmt.Sprintf("%s-%s.json", timestamp, domain))
 	return filename, os.WriteFile(filename, data, 0644)
-}
-
-func printEnhancedDomainInfo(enhanced *rules.EnhancedDomainInfo) {
-	info := enhanced.DomainInfo
-
-	fmt.Println("Domain Info:")
-	fmt.Printf("Domain: %s\n", info.Domain)
-	fmt.Printf("Checked at: %v\n", info.QueryTime.Format(time.RFC3339))
-
-	fmt.Println("\nMX Records:")
-	if len(info.MXRecords) > 0 {
-		for _, mx := range info.MXRecords {
-			fmt.Printf("Host: %s, Priority: %d\n", mx.Host, mx.Priority)
-		}
-	} else {
-		fmt.Println("No MX records found")
-	}
-
-	fmt.Println("\nSPF Record:")
-	if info.SPFRecord != nil {
-		fmt.Println(info.SPFRecord.Raw)
-	} else {
-		fmt.Println("No SPF record found")
-	}
-
-	fmt.Println("\nDMARC Record:")
-	if info.DMARCRecord != nil {
-		fmt.Printf("%s (at %s)\n", info.DMARCRecord.Raw, info.DMARCRecord.Location)
-	} else {
-		fmt.Println("No DMARC record found")
-	}
-
-	fmt.Println("\nDKIM Selectors:")
-	if info.DKIMInfo != nil && info.DKIMInfo.HasSelectors {
-		fmt.Println(strings.Join(info.DKIMInfo.Selectors, ", "))
-	} else {
-		fmt.Println("None found")
-	}
-
-	fmt.Println("\nDNSSEC Info:")
-	if info.DNSSECInfo != nil {
-		fmt.Printf("DNSSEC Enabled: %v\n", info.DNSSECInfo.Enabled)
-	} else {
-		fmt.Println("DNSSEC Info: Not available")
-	}
-
-	if info.HasErrors() {
-		fmt.Println("\nLookup Errors:")
-		checks := make([]string, 0, len(info.Errors))
-		for check := range info.Errors {
-			checks = append(checks, check)
-		}
-		sort.Strings(checks)
-		for _, check := range checks {
-			fmt.Printf("%s: %s\n", check, info.Errors[check])
-		}
-	}
-
-	fmt.Println("\nRule Check Results:")
-	for _, result := range enhanced.RuleResults {
-		icon := getRuleStatusIcon(result.Status)
-		fmt.Printf("%s [%d] %s: %s\n", icon, result.RuleID, result.Description, result.Message)
-	}
-}
-
-func getRuleStatusIcon(status rules.Status) string {
-	switch status {
-	case rules.StatusPass:
-		return "✅"
-	case rules.StatusWarn:
-		return "⚠️"
-	case rules.StatusFail:
-		return "❌"
-	case rules.StatusInfo:
-		return "ℹ️"
-	default:
-		return "❓"
-	}
 }

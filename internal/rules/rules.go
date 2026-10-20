@@ -16,9 +16,24 @@ const (
 	StatusInfo Status = "info"
 )
 
+// Area is the part of the mail setup a rule checks
+type Area string
+
+const (
+	AreaSPF    Area = "SPF"
+	AreaDMARC  Area = "DMARC"
+	AreaDKIM   Area = "DKIM"
+	AreaDNSSEC Area = "DNSSEC"
+	AreaMX     Area = "MX"
+)
+
+// Areas lists all areas in display order
+var Areas = []Area{AreaSPF, AreaDMARC, AreaDKIM, AreaDNSSEC, AreaMX}
+
 // RuleResult represents the outcome of a rule check
 type RuleResult struct {
 	RuleID      int    `json:"rule_id"`
+	Area        Area   `json:"area"`
 	Description string `json:"description"`
 	Status      Status `json:"status"`
 	Message     string `json:"message"`
@@ -39,9 +54,10 @@ func NewEnhancedDomainInfo(info *collector.DomainInfo) *EnhancedDomainInfo {
 }
 
 // add appends a rule result
-func (info *EnhancedDomainInfo) add(id int, description string, status Status, message string) {
+func (info *EnhancedDomainInfo) add(id int, area Area, description string, status Status, message string) {
 	info.RuleResults = append(info.RuleResults, RuleResult{
 		RuleID:      id,
+		Area:        area,
 		Description: description,
 		Status:      status,
 		Message:     message,

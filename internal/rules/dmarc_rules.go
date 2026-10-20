@@ -13,16 +13,16 @@ func CheckDMARCPolicy(info *EnhancedDomainInfo) {
 
 	switch info.DMARCPolicy.Policy {
 	case "reject":
-		info.add(4, "DMARC policy set to reject", StatusPass,
+		info.add(4, AreaDMARC, "Policy: reject", StatusPass,
 			"DMARC policy is set to 'reject', which provides the strongest protection against email spoofing.")
 	case "quarantine":
-		info.add(4, "DMARC policy set to quarantine", StatusWarn,
+		info.add(4, AreaDMARC, "Policy: quarantine", StatusWarn,
 			"DMARC policy is set to 'quarantine'. Consider upgrading to 'reject' for stronger protection once you've verified legitimate emails are passing authentication.")
 	case "none":
-		info.add(4, "DMARC policy set to none", StatusFail,
+		info.add(4, AreaDMARC, "Policy: none (monitoring only)", StatusFail,
 			"DMARC policy is set to 'none', which only monitors but doesn't protect against spoofing. Consider upgrading to 'quarantine' or ideally 'reject'.")
 	default:
-		info.add(4, "DMARC policy not found or invalid", StatusFail,
+		info.add(4, AreaDMARC, "No valid policy", StatusFail,
 			"No valid DMARC policy (p tag) was found. Ensure your DMARC record includes a valid p=reject, p=quarantine, or p=none tag.")
 	}
 }
@@ -30,16 +30,17 @@ func CheckDMARCPolicy(info *EnhancedDomainInfo) {
 // CheckDMARCExists verifies that a DMARC record exists for the domain
 func CheckDMARCExists(info *EnhancedDomainInfo) {
 	if info.DMARCRecord == nil {
-		info.add(5, "DMARC record existence", StatusFail,
+		info.add(5, AreaDMARC, "No DMARC record", StatusFail,
 			"No DMARC record was found for this domain. DMARC is essential for preventing email spoofing. Add a DMARC record with p=reject or at least p=quarantine.")
 		return
 	}
 
-	message := "DMARC record exists for this domain."
+	description, message := "Record published", "DMARC record exists for this domain."
 	if info.DMARCRecord.Location != "_dmarc."+info.Domain {
+		description = "Inherited from organizational domain"
 		message = fmt.Sprintf("No DMARC record at _dmarc.%s; the organizational domain record at %s applies.", info.Domain, info.DMARCRecord.Location)
 	}
-	info.add(5, "DMARC record existence", StatusPass, message)
+	info.add(5, AreaDMARC, description, StatusPass, message)
 }
 
 // CheckDMARCValid verifies the DMARC record syntax
@@ -49,9 +50,9 @@ func CheckDMARCValid(info *EnhancedDomainInfo) {
 	}
 
 	if info.DMARCRecord.Valid {
-		info.add(17, "DMARC record syntax", StatusPass, "DMARC record syntax is valid.")
+		info.add(17, AreaDMARC, "Valid syntax", StatusPass, "DMARC record syntax is valid.")
 	} else {
-		info.add(17, "DMARC record syntax", StatusFail,
+		info.add(17, AreaDMARC, "Invalid syntax", StatusFail,
 			"DMARC record is invalid: "+strings.Join(info.DMARCRecord.Problems, "; ")+".")
 	}
 }
@@ -63,10 +64,10 @@ func CheckDMARCPercentage(info *EnhancedDomainInfo) {
 	}
 
 	if pct := info.DMARCPolicy.Percentage; pct < 100 {
-		info.add(18, "DMARC policy percentage", StatusWarn,
+		info.add(18, AreaDMARC, fmt.Sprintf("Applies to %d%% of mail", pct), StatusWarn,
 			fmt.Sprintf("DMARC policy only applies to %d%% of failing mail (pct=%d). Raise pct to 100 once you are confident in your setup.", pct, pct))
 	} else {
-		info.add(18, "DMARC policy percentage", StatusPass, "DMARC policy applies to all failing mail.")
+		info.add(18, AreaDMARC, "Applies to 100% of mail", StatusPass, "DMARC policy applies to all failing mail.")
 	}
 }
 
@@ -77,10 +78,10 @@ func CheckDMARCReporting(info *EnhancedDomainInfo) {
 	}
 
 	if len(info.DMARCPolicy.AggregateReportURI) == 0 {
-		info.add(19, "DMARC aggregate reporting", StatusWarn,
+		info.add(19, AreaDMARC, "No aggregate reports (rua)", StatusWarn,
 			"DMARC record has no rua tag, so you receive no aggregate reports about who sends mail as your domain. Add rua=mailto:...")
 	} else {
-		info.add(19, "DMARC aggregate reporting", StatusPass,
+		info.add(19, AreaDMARC, "Aggregate reports enabled", StatusPass,
 			"Aggregate reports are sent to: "+strings.Join(info.DMARCPolicy.AggregateReportURI, ", "))
 	}
 }
@@ -92,10 +93,10 @@ func CheckDMARCSubdomainPolicy(info *EnhancedDomainInfo) {
 	}
 
 	if info.DMARCPolicy.SubdomainPolicy == "none" {
-		info.add(20, "DMARC subdomain policy", StatusWarn,
+		info.add(20, AreaDMARC, "Subdomains unprotected (sp=none)", StatusWarn,
 			"DMARC subdomain policy is sp=none, so spoofed mail from subdomains is not blocked. Consider sp=quarantine or sp=reject.")
 	} else {
-		info.add(20, "DMARC subdomain policy", StatusPass,
+		info.add(20, AreaDMARC, "Subdomain policy: "+info.DMARCPolicy.SubdomainPolicy, StatusPass,
 			fmt.Sprintf("Subdomains are covered by policy '%s'.", info.DMARCPolicy.SubdomainPolicy))
 	}
 }

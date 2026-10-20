@@ -34,13 +34,13 @@ func addresses(record mx.MXRecord) []net.IP {
 func CheckMXExists(info *EnhancedDomainInfo) {
 	switch {
 	case mx.IsNullMX(info.MXRecords):
-		info.add(9, "MX record existence", StatusInfo,
+		info.add(9, AreaMX, "Null MX: accepts no mail", StatusInfo,
 			"Domain publishes a null MX (RFC 7505): it explicitly accepts no email.")
 	case len(info.MXRecords) == 0:
-		info.add(9, "MX record existence", StatusWarn,
+		info.add(9, AreaMX, "No MX records", StatusWarn,
 			"No MX records found. If this domain is used for email, add MX records to specify mail servers. If it never receives mail, publish a null MX (\"MX 0 .\").")
 	default:
-		info.add(9, "MX record existence", StatusPass,
+		info.add(9, AreaMX, plural(len(info.MXRecords), "MX record"), StatusPass,
 			fmt.Sprintf("Found %d MX records for this domain.", len(info.MXRecords)))
 	}
 }
@@ -60,10 +60,10 @@ func CheckMXHasIPs(info *EnhancedDomainInfo) {
 	}
 
 	if len(badMXHosts) > 0 {
-		info.add(10, "MX records have IP addresses", StatusWarn,
+		info.add(10, AreaMX, "Hosts without IP addresses", StatusWarn,
 			fmt.Sprintf("The following MX hosts could not be resolved to IP addresses: %s", strings.Join(badMXHosts, ", ")))
 	} else {
-		info.add(10, "MX records have IP addresses", StatusPass, "All MX records resolve to valid IP addresses.")
+		info.add(10, AreaMX, "All hosts resolve", StatusPass, "All MX records resolve to valid IP addresses.")
 	}
 }
 
@@ -89,10 +89,10 @@ func CheckMXHasIPv6(info *EnhancedDomainInfo) {
 	}
 
 	if len(badMXHosts) > 0 {
-		info.add(11, "MX records have IPv6 addresses", StatusWarn,
+		info.add(11, AreaMX, "Hosts without IPv6", StatusWarn,
 			fmt.Sprintf("The following MX hosts could not be resolved to IPv6 addresses: %s", strings.Join(badMXHosts, ", ")))
 	} else {
-		info.add(11, "MX records have IPv6 addresses", StatusPass, "All MX records resolve to IPv6 addresses.")
+		info.add(11, AreaMX, "All hosts have IPv6", StatusPass, "All MX records resolve to IPv6 addresses.")
 	}
 }
 
@@ -103,10 +103,10 @@ func CheckMXRedundancy(info *EnhancedDomainInfo) {
 	case 0:
 		return
 	case 1:
-		info.add(12, "MX record redundancy", StatusWarn,
+		info.add(12, AreaMX, "Single MX host, no backup", StatusWarn,
 			"Only one MX record found. For better email reliability, consider adding at least one backup MX server.")
 	default:
-		info.add(12, "MX record redundancy", StatusPass,
+		info.add(12, AreaMX, "Redundant MX hosts", StatusPass,
 			fmt.Sprintf("Found %d MX records, which provides redundancy for email delivery.", len(hosts)))
 	}
 }
@@ -122,11 +122,11 @@ func CheckMXTooMany(info *EnhancedDomainInfo) {
 	const maxRecommendedMX = 5
 
 	if len(hosts) > maxRecommendedMX {
-		info.add(13, "MX record count", StatusWarn,
+		info.add(13, AreaMX, "More than 5 MX records", StatusWarn,
 			fmt.Sprintf("Found %d MX records, which is more than the recommended maximum of %d. Too many MX records may indicate a misconfiguration.",
 				len(hosts), maxRecommendedMX))
 	} else {
-		info.add(13, "MX record count", StatusPass,
+		info.add(13, AreaMX, "At most 5 MX records", StatusPass,
 			fmt.Sprintf("Found %d MX records, which is within the recommended range (1-%d).", len(hosts), maxRecommendedMX))
 	}
 }
@@ -152,11 +152,11 @@ func CheckMXLocalhost(info *EnhancedDomainInfo) {
 	}
 
 	if len(badMXs) > 0 {
-		info.add(14, "MX localhost check", StatusFail,
+		info.add(14, AreaMX, "Points to localhost", StatusFail,
 			fmt.Sprintf("Found %d MX records pointing to localhost or loopback addresses: %s. This is a misconfiguration that will prevent email delivery.",
 				len(badMXs), strings.Join(badMXs, ", ")))
 	} else {
-		info.add(14, "MX localhost check", StatusPass, "No MX records pointing to localhost found.")
+		info.add(14, AreaMX, "No localhost targets", StatusPass, "No MX records pointing to localhost found.")
 	}
 }
 
@@ -181,10 +181,10 @@ func CheckMXPrivateIPs(info *EnhancedDomainInfo) {
 	}
 
 	if len(details) > 0 {
-		info.add(15, "MX private IP check", StatusFail,
+		info.add(15, AreaMX, "Private IP addresses", StatusFail,
 			fmt.Sprintf("Found %d MX records resolving to private IP addresses. %s", len(details), strings.Join(details, "; ")))
 	} else {
-		info.add(15, "MX private IP check", StatusPass, "No MX records resolving to private IP addresses found.")
+		info.add(15, AreaMX, "No private IP addresses", StatusPass, "No MX records resolving to private IP addresses found.")
 	}
 }
 
@@ -206,14 +206,22 @@ func CheckMXCNAME(info *EnhancedDomainInfo) {
 	}
 
 	if len(aliases) > 0 {
-		info.add(22, "MX hosts are not CNAMEs", StatusWarn,
+		info.add(22, AreaMX, "Hosts are CNAMEs", StatusWarn,
 			fmt.Sprintf("MX records must point to a host name with A/AAAA records, not to a CNAME: %s", strings.Join(aliases, ", ")))
 	} else {
-		info.add(22, "MX hosts are not CNAMEs", StatusPass, "No MX records point to a CNAME.")
+		info.add(22, AreaMX, "No CNAME targets", StatusPass, "No MX records point to a CNAME.")
 	}
 }
 
 // isPrivateIP checks if an IP address is in a private, loopback or link-local range
 func isPrivateIP(ip net.IP) bool {
 	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
+}
+
+// plural returns "1 thing" or "n things"
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }

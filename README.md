@@ -55,6 +55,34 @@ check-maildomain -json example.com | jq .
 check-maildomain -output results example.com
 ```
 
+## Example Output
+
+```
+google.com  ·  2026-10-21 00:13  ·  via 8.8.8.8
+
+SPF      ✓  v=spf1 include:_spf.google.com ~all
+         ✓  No deprecated ptr mechanism
+         ✓  1 of 10 DNS lookups
+         ✓  Ends with ~all
+         ✓  Record published
+         ✓  Single record
+
+DKIM     !  No key under common selectors
+            The _domainkey name exists but no DKIM key was found under the common selectors.
+            Selectors are provider-specific; check yours with -selector.
+
+MX       !  smtp.google.com (10)
+         ✓  1 MX record
+         !  Single MX host, no backup
+            Only one MX record found. For better email reliability, consider adding at least one
+            backup MX server.
+         ...
+
+18 passed · 3 warnings · 0 failed
+```
+
+Results are grouped per area: `✓` pass, `!` warning, `✗` fail, `i` info. Details are shown for anything that is not a pass (use `-v` to see them all). Colours are used when writing to a terminal and are turned off when the output is piped or `NO_COLOR` is set. Long lines wrap to `$COLUMNS` (default 100).
+
 ## Command-line Options
 
 | Flag | Default | Description |
@@ -64,6 +92,7 @@ check-maildomain -output results example.com
 | `-fallback` | | Nameserver to use when the primary does not respond |
 | `-timeout` | `3s` | Timeout per DNS query |
 | `-selector` | | Extra DKIM selector to check (repeatable, or comma-separated) |
+| `-v` | `false` | Also show the details of passing checks |
 | `-json` | `false` | Output results as JSON |
 | `-output` | | Folder to save JSON results to (implies `-json`) |
 | `-version` | | Print version and exit |
