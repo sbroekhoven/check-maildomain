@@ -46,7 +46,7 @@ type reportArea struct {
 	Worst   rules.Status
 	Summary string
 	Facts   []fact
-	Table   *dataTable
+	Tables  []dataTable
 	Error   string
 	Results []rules.RuleResult
 }
@@ -59,8 +59,9 @@ type fact struct {
 }
 
 type dataTable struct {
-	Head []string
-	Rows [][]string
+	Title string
+	Head  []string
+	Rows  [][]string
 }
 
 // WriteHTML renders the results as a self-contained HTML page. version is shown in the footer.
@@ -101,9 +102,12 @@ func buildReport(e *rules.Report, nameserver, version string) reportData {
 
 	for _, area := range rules.Areas {
 		results, worst := areaResults(e.RuleResults, area)
+		if len(results) == 0 {
+			continue // no check applies, e.g. TLS for a domain that receives no mail
+		}
 		ra := reportArea{
 			Area:    area,
-			ID:      string(area.Check()),
+			ID:      strings.ToLower(string(area)),
 			Worst:   worst,
 			Summary: areaSummary(e, area),
 			Results: results,
@@ -111,7 +115,7 @@ func buildReport(e *rules.Report, nameserver, version string) reportData {
 		addFound(&ra, e)
 
 		// Show failed lookups as a note, unless the summary already shows the error
-		if err, failed := e.LookupFailure(area.Check()); failed && err != ra.Summary {
+		if err, failed := areaFailure(e, area); failed && err != ra.Summary {
 			ra.Error = err
 		}
 		data.Areas = append(data.Areas, ra)
@@ -141,6 +145,7 @@ func addFound(ra *reportArea, e *rules.Report) {
 		ra.Summary = "SPF record published"
 		add("Record", r.Raw, true)
 		add("DNS lookups", fmt.Sprintf("%d of %d", r.LookupCount, spf.MaxDNSLookups), false)
+		add("Void lookups", fmt.Sprintf("%d of %d", r.VoidLookups, spf.MaxVoidLookups), false)
 		if r.RecordCount > 1 {
 			add("Records published", strconv.Itoa(r.RecordCount), false)
 		}
@@ -155,9 +160,22 @@ func addFound(ra *reportArea, e *rules.Report) {
 		}
 		add("Record", r.Raw, true)
 		add("Found at", r.Location, true)
-		ra.Table = &dataTable{Head: []string{"Tag", "Value", "Meaning"}}
+		tags := dataTable{Head: []string{"Tag", "Value", "Meaning"}}
 		for _, tag := range orderedTags(r.Tags) {
-			ra.Table.Rows = append(ra.Table.Rows, []string{tag, r.Tags[tag], dmarcTagNames[tag]})
+			tags.Rows = append(tags.Rows, []string{tag, r.Tags[tag], dmarcTagNames[tag]})
+		}
+		ra.Tables = append(ra.Tables, tags)
+		for _, ext := range r.ExternalReports {
+			status := "authorized"
+			switch {
+			case ext.Domain == "":
+				status = ext.Error
+			case ext.Unchecked:
+				status = "could not be checked"
+			case !ext.Authorized:
+				status = "not authorized"
+			}
+			add("External report address", ext.URI+" ("+status+")", false)
 		}
 
 	case rules.AreaDKIM:
@@ -171,6 +189,27 @@ func addFound(ra *reportArea, e *rules.Report) {
 		}
 		add("Selectors", selectors, d.HasSelectors)
 		add("_domainkey", d.ResponseCode, true)
+		if len(d.Keys) > 0 {
+			keys := dataTable{Head: []string{"Selector", "Key", "Flags"}}
+			for _, k := range d.Keys {
+				key := fmt.Sprintf("%s %d bits", strings.ToUpper(k.Type), k.Bits)
+				switch {
+				case k.Revoked:
+					key = "revoked"
+				case k.Error != "":
+					key = k.Error
+				}
+				var flags []string
+				if k.TestMode {
+					flags = append(flags, "test mode (t=y)")
+				}
+				if len(k.HashAlgorithms) > 0 {
+					flags = append(flags, "h="+strings.Join(k.HashAlgorithms, ":"))
+				}
+				keys.Rows = append(keys.Rows, []string{k.Selector, key, strings.Join(flags, ", ")})
+			}
+			ra.Tables = append(ra.Tables, keys)
+		}
 
 	case rules.AreaDNSSEC:
 		d := e.DNSSECInfo
@@ -198,18 +237,94 @@ func addFound(ra *reportArea, e *rules.Report) {
 			return
 		}
 		ra.Summary = plural(len(e.MXRecords), "mail server")
-		ra.Table = &dataTable{Head: []string{"Priority", "Host", "Records"}}
+		hosts := dataTable{Head: []string{"Priority", "Host", "Records", "Reverse DNS"}}
 		for _, r := range e.MXRecords {
-			var records []string
+			var records, ptrs []string
 			for _, rec := range r.Records {
 				records = append(records, rec.Type+" "+rec.Value)
+				if rec.Type == "A" || rec.Type == "AAAA" {
+					ptrs = append(ptrs, describePTR(rec))
+				}
 			}
 			if len(records) == 0 {
 				records = []string{"(does not resolve)"}
 			}
-			ra.Table.Rows = append(ra.Table.Rows, []string{strconv.Itoa(int(r.Priority)), r.Host, strings.Join(records, "\n")})
+			hosts.Rows = append(hosts.Rows, []string{strconv.Itoa(int(r.Priority)), r.Host, strings.Join(records, "\n"), strings.Join(ptrs, "\n")})
+		}
+		ra.Tables = append(ra.Tables, hosts)
+
+	case rules.AreaTLS:
+		if m := e.MTASTS; m != nil {
+			add("MTA-STS record", m.Record, true)
+			add("Policy URL", m.PolicyURL, true)
+			if m.PolicyError != "" {
+				add("Policy error", m.PolicyError, false)
+			}
+			if p := m.Policy; p != nil {
+				add("Mode", p.Mode, false)
+				add("Allowed MX", strings.Join(p.MX, ", "), true)
+				add("Max age", fmt.Sprintf("%d seconds", p.MaxAge), false)
+			}
+		}
+		if t := e.TLSRPT; t != nil {
+			add("TLS-RPT record", t.Record, true)
+		}
+		if len(e.DANE) > 0 {
+			dane := dataTable{Title: "DANE (TLSA records)", Head: []string{"MX host", "TLSA", "DNSSEC"}}
+			for _, h := range e.DANE {
+				var tlsa []string
+				for _, t := range h.TLSA {
+					tlsa = append(tlsa, fmt.Sprintf("%d %d %d %s", t.Usage, t.Selector, t.MatchingType, shorten(t.Data, 16)))
+				}
+				if len(tlsa) == 0 {
+					tlsa = []string{"none"}
+				}
+				validated := "-"
+				if len(h.TLSA) > 0 {
+					validated = yesNo(h.Authenticated)
+				}
+				if h.Error != "" {
+					tlsa, validated = []string{h.Error}, "-"
+				}
+				dane.Rows = append(dane.Rows, []string{h.Host, strings.Join(tlsa, "\n"), validated})
+			}
+			ra.Tables = append(ra.Tables, dane)
+		}
+
+	case rules.AreaBIMI:
+		if b := e.BIMI; b != nil {
+			add("Record", b.Raw, true)
+			add("Found at", b.Location, true)
+			if b.Logo != "" {
+				add("Logo", b.Logo, true)
+			}
+			if b.Authority != "" {
+				add("Certificate", b.Authority, true)
+			}
 		}
 	}
+}
+
+// describePTR summarizes the reverse DNS of an address record
+func describePTR(rec mx.Record) string {
+	switch {
+	case rec.PTRError != "":
+		return "lookup failed"
+	case rec.PTR == "":
+		return "no PTR"
+	case rec.PTRConfirmed:
+		return rec.PTR + " ✓"
+	default:
+		return rec.PTR + " (does not resolve back)"
+	}
+}
+
+// shorten cuts long hex data for display
+func shorten(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // dmarcTagNames explains the DMARC tags (RFC 7489 6.3)

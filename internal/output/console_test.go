@@ -60,14 +60,17 @@ func TestConsolePrint(t *testing.T) {
 		"example.com  ·  2026-01-02 03:04  ·  via 8.8.8.8\n",
 		"SPF      !  v=spf1 mx ?all\n",                                           // area line shows the worst status and the record
 		"         !  Ends with ?all (neutral)\n            SPF record uses ?all", // problems get details
-		"         ✓  Record published\n         ✓  Single record\n\n",            // passes stay on one line
+		"         ✓  Single record\n         ✓  Valid syntax\n",                  // passes stay on one line
 		"DMARC    ✗  No DMARC record\n            No DMARC record was found",     // single check is merged into the area line
-		"MX       !  No MX records\n",
+		"MX       !  No MX records found\n         !  No MX records\n",
 		" passed · ",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output does not contain %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "TLS      ") {
+		t.Error("an area without results (TLS for a domain without MX) should not be printed")
 	}
 	if strings.Contains(out, "\033[") {
 		t.Error("output contains ANSI codes while colour is off")

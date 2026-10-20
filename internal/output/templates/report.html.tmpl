@@ -106,6 +106,7 @@ table.data th { text-align: left; font-weight: 600; color: var(--muted); font-si
 table.data th, table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 table.data td { overflow-wrap: anywhere; white-space: pre-line; }
 table.data td:first-child, table.data th:first-child { white-space: nowrap; overflow-wrap: normal; }
+.card h4 { margin: 14px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); }
 .error { margin-top: 12px; padding: 8px 10px; border-radius: 6px; background: var(--code-bg); color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 
 /* Checks */
@@ -171,7 +172,7 @@ footer a { color: inherit; }
       </div>
       <p class="lead">{{.Summary}}</p>
 
-      {{- if or .Facts .Table}}
+      {{- if or .Facts .Tables}}
       <h3>Found</h3>
       {{- if .Facts}}
       <dl class="facts">
@@ -181,7 +182,8 @@ footer a { color: inherit; }
         {{- end}}
       </dl>
       {{- end}}
-      {{- with .Table}}
+      {{- range .Tables}}
+      {{- with .Title}}<h4>{{.}}</h4>{{end}}
       <table class="data">
         <thead><tr>{{range .Head}}<th>{{.}}</th>{{end}}</tr></thead>
         <tbody>

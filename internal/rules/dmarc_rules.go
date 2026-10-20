@@ -31,7 +31,7 @@ func checkDMARCPolicy(d *collector.DomainInfo) *Outcome {
 
 // checkDMARCExists verifies that a DMARC record exists for the domain
 func checkDMARCExists(d *collector.DomainInfo) *Outcome {
-	if o := unchecked(d, AreaDMARC); o != nil {
+	if o := unchecked(d, collector.CheckDMARC, "DMARC"); o != nil {
 		return o
 	}
 	if d.DMARCRecord == nil {
@@ -102,5 +102,41 @@ func checkDMARCSubdomainPolicy(d *collector.DomainInfo) *Outcome {
 	} else {
 		return pass("Subdomain policy: "+d.DMARCPolicy.SubdomainPolicy,
 			fmt.Sprintf("Subdomains are covered by policy '%s'.", d.DMARCPolicy.SubdomainPolicy))
+	}
+}
+
+// checkDMARCReportAuthorization verifies that report addresses in other domains accepted the
+// reports (RFC 7489 7.1); without that, receivers don't send them
+func checkDMARCReportAuthorization(d *collector.DomainInfo) *Outcome {
+	if d.DMARCRecord == nil || len(d.DMARCPolicy.AggregateReportURI)+len(d.DMARCPolicy.ForensicReportURI) == 0 {
+		return nil
+	}
+
+	var unauthorized, unsupported, unchecked []string
+	for _, r := range d.DMARCRecord.ExternalReports {
+		switch {
+		case r.Domain == "":
+			unsupported = append(unsupported, r.URI)
+		case r.Unchecked:
+			unchecked = append(unchecked, r.URI)
+		case !r.Authorized:
+			unauthorized = append(unauthorized, fmt.Sprintf("%s (needs %s._report._dmarc.%s)", r.URI, strings.TrimPrefix(d.DMARCRecord.Location, "_dmarc."), r.Domain))
+		}
+	}
+
+	switch {
+	case len(unauthorized) > 0:
+		return warn("Report address not authorized",
+			"These report addresses are in another domain that has not agreed to receive your reports, so receivers will not send them: "+strings.Join(unauthorized, "; ")+". Ask the report provider to publish the record, or check the address.")
+	case len(unsupported) > 0:
+		return warn("Unsupported report address",
+			"Receivers only send reports to mailto: addresses: "+strings.Join(unsupported, ", ")+".")
+	case len(unchecked) > 0:
+		return inform("Could not be checked",
+			"The authorization of these report addresses could not be looked up: "+strings.Join(unchecked, ", ")+".")
+	case len(d.DMARCRecord.ExternalReports) > 0:
+		return pass("External report addresses authorized", "Report addresses in other domains have published their authorization.")
+	default:
+		return pass("Report addresses in own domain", "All report addresses are in your own organizational domain.")
 	}
 }

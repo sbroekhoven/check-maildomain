@@ -1,8 +1,10 @@
 package mx
 
 import (
+	"net"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
 	"github.com/sbroekhoven/check-maildomain/internal/resolver"
@@ -12,6 +14,11 @@ import (
 type Record struct {
 	Type  string `json:"type"`  // "A", "AAAA", or "CNAME"
 	Value string `json:"value"` // IP address or CNAME target
+
+	// Reverse DNS, for A and AAAA records only
+	PTR          string `json:"ptr,omitempty"`           // host name the address points back to
+	PTRConfirmed bool   `json:"ptr_confirmed,omitempty"` // the PTR name resolves back to this address (FCrDNS)
+	PTRError     string `json:"ptr_error,omitempty"`     // the reverse lookup failed (not: no PTR record)
 }
 
 // MXRecord represents an MX record with its priority
@@ -46,16 +53,26 @@ func LookupMX(domain string, res *resolver.Resolver) ([]MXRecord, error) {
 				Priority: mx.Preference,
 				Records:  []Record{},
 			}
-
 			if mx.Mx == "." {
 				record.Host = NullMXHost
-			} else {
-				record.Records = resolveMXHost(record.Host, res)
 			}
-
 			records = append(records, record)
 		}
 	}
+
+	// Resolve all MX hosts concurrently
+	var wg sync.WaitGroup
+	for i := range records {
+		if records[i].Host == NullMXHost {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			records[i].Records = resolveMXHost(records[i].Host, res)
+		}()
+	}
+	wg.Wait()
 
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].Priority != records[j].Priority {
@@ -95,5 +112,54 @@ func resolveMXHost(host string, res *resolver.Resolver) []Record {
 		}
 	}
 
+	for i := range records {
+		if records[i].Type == "A" || records[i].Type == "AAAA" {
+			reverseLookup(&records[i], res)
+		}
+	}
 	return records
+}
+
+// reverseLookup fills in the PTR of an address record and checks that the PTR name resolves back
+// to the same address (forward-confirmed reverse DNS)
+func reverseLookup(record *Record, res *resolver.Resolver) {
+	ip := net.ParseIP(record.Value)
+	arpa, err := dns.ReverseAddr(record.Value)
+	if ip == nil || err != nil {
+		return
+	}
+
+	r, err := res.Query(arpa, dns.TypePTR, false)
+	if err != nil {
+		if !resolver.IsNotFound(err) {
+			record.PTRError = err.Error()
+		}
+		return
+	}
+	for _, a := range r.Answer {
+		if ptr, ok := a.(*dns.PTR); ok {
+			record.PTR = strings.TrimSuffix(ptr.Ptr, ".")
+			break
+		}
+	}
+	if record.PTR == "" {
+		return
+	}
+
+	qtype := dns.TypeAAAA
+	if record.Type == "A" {
+		qtype = dns.TypeA
+	}
+	fwd, err := res.Query(record.PTR, qtype, false)
+	if err != nil {
+		return
+	}
+	for _, a := range fwd.Answer {
+		switch rr := a.(type) {
+		case *dns.A:
+			record.PTRConfirmed = record.PTRConfirmed || rr.A.Equal(ip)
+		case *dns.AAAA:
+			record.PTRConfirmed = record.PTRConfirmed || rr.AAAA.Equal(ip)
+		}
+	}
 }

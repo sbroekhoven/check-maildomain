@@ -46,7 +46,7 @@ func TestWriteHTML(t *testing.T) {
 		"Checked 2 January 2026, 03:04 UTC · via 8.8.8.8",
 		`<section class="card pass" id="spf">`,
 		`<section class="card pass" id="dmarc">`,
-		`id="dkim"`, `id="dnssec"`, `id="mx"`,
+		`id="dkim"`, `id="dnssec"`, `id="mx"`, `id="tls"`, `id="bimi"`,
 		"<td>mx1.example.com</td>",
 		"A 192.0.2.1\nAAAA 2001:db8::1",
 		"(does not resolve)",
@@ -66,8 +66,11 @@ func TestWriteHTML(t *testing.T) {
 	}
 
 	// Self-contained: the only external reference is the footer link
-	if n := strings.Count(out, "http"); n != 1 {
-		t.Errorf("report contains %d http references, want only the footer link", n)
+	if n := strings.Count(out, `href="http`); n != 1 {
+		t.Errorf("report contains %d external links, want only the footer link", n)
+	}
+	if strings.Contains(out, `src="`) || strings.Contains(out, "<link") || strings.Contains(out, "@import") {
+		t.Error("report loads external resources")
 	}
 }
 

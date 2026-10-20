@@ -12,7 +12,7 @@ const signatureExpiryWarning = 7 * 24 * time.Hour
 
 // checkDNSSECEnabled verifies if DNSSEC is enabled for the domain
 func checkDNSSECEnabled(d *collector.DomainInfo) *Outcome {
-	if o := unchecked(d, AreaDNSSEC); o != nil {
+	if o := unchecked(d, collector.CheckDNSSEC, "DNSSEC"); o != nil {
 		return o
 	}
 	sec := d.DNSSECInfo

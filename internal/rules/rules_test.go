@@ -8,12 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sbroekhoven/check-maildomain/internal/bimi"
 	"github.com/sbroekhoven/check-maildomain/internal/collector"
 	"github.com/sbroekhoven/check-maildomain/internal/dkim"
 	"github.com/sbroekhoven/check-maildomain/internal/dmarc"
 	"github.com/sbroekhoven/check-maildomain/internal/dnssec"
 	"github.com/sbroekhoven/check-maildomain/internal/mx"
 	"github.com/sbroekhoven/check-maildomain/internal/spf"
+	"github.com/sbroekhoven/check-maildomain/internal/transport"
 )
 
 // newInfo returns empty collected data for example.com, modified by setup
@@ -424,13 +426,280 @@ func TestFailedLookupsAreUnchecked(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.area), func(t *testing.T) {
-			o := evalRule(t, tt.ruleID, newInfo(failed(tt.area.Check())))
+			o := evalRule(t, tt.ruleID, newInfo(failed(tt.area.Checks()[0])))
 			if o == nil || o.Status != StatusInfo || o.Description != "Could not be checked" {
 				t.Errorf("failed lookup: outcome = %+v, want info 'Could not be checked'", o)
 			}
-			if got := statusOf(t, tt.ruleID, newInfo(notFound(tt.area.Check()))); got != tt.absent {
+			if got := statusOf(t, tt.ruleID, newInfo(notFound(tt.area.Checks()[0]))); got != tt.absent {
 				t.Errorf("record not found: status = %q, want %q", got, tt.absent)
 			}
 		})
 	}
+}
+
+func withDKIMKeys(keys ...dkim.Key) func(*collector.DomainInfo) {
+	return func(d *collector.DomainInfo) {
+		d.DKIMInfo = &dkim.DKIMInfo{Domain: d.Domain, HasDomainKey: true, HasSelectors: len(keys) > 0, Keys: keys}
+		for _, k := range keys {
+			d.DKIMInfo.Selectors = append(d.DKIMInfo.Selectors, k.Selector)
+		}
+	}
+}
+
+func TestDKIMKeyRules(t *testing.T) {
+	rsa := func(bits int) dkim.Key { return dkim.Key{Selector: "s1", Type: "rsa", Bits: bits} }
+
+	t.Run("strength", func(t *testing.T) {
+		runRuleCases(t, 23, []ruleCase{
+			{"no keys", withDKIMKeys(), ""},
+			{"2048", withDKIMKeys(rsa(2048)), StatusPass},
+			{"ed25519", withDKIMKeys(dkim.Key{Selector: "ed", Type: "ed25519", Bits: 256}), StatusPass},
+			{"1024", withDKIMKeys(rsa(1024)), StatusWarn},
+			{"512", withDKIMKeys(rsa(2048), rsa(512)), StatusFail},
+			{"unparseable", withDKIMKeys(dkim.Key{Selector: "x", Type: "rsa", Error: "bad"}), StatusWarn},
+			{"only revoked", withDKIMKeys(dkim.Key{Selector: "old", Type: "rsa", Revoked: true}), ""},
+		})
+	})
+
+	t.Run("flags", func(t *testing.T) {
+		testMode := rsa(2048)
+		testMode.TestMode = true
+		sha1 := rsa(2048)
+		sha1.HashAlgorithms = []string{"sha1"}
+		both := rsa(2048)
+		both.HashAlgorithms = []string{"sha1", "sha256"}
+		revoked := dkim.Key{Selector: "old", Revoked: true}
+		runRuleCases(t, 24, []ruleCase{
+			{"clean", withDKIMKeys(rsa(2048)), StatusPass},
+			{"test mode", withDKIMKeys(testMode), StatusWarn},
+			{"sha1 only", withDKIMKeys(sha1), StatusWarn},
+			{"sha1 and sha256", withDKIMKeys(both), StatusPass},
+			{"one revoked", withDKIMKeys(rsa(2048), revoked), StatusPass},
+			{"all revoked", withDKIMKeys(revoked), StatusInfo},
+		})
+	})
+}
+
+func TestNewSPFRules(t *testing.T) {
+	t.Run("syntax", func(t *testing.T) {
+		runRuleCases(t, 25, []ruleCase{
+			{"valid", withSPF("v=spf1 mx ip4:192.0.2.0/24 -all"), StatusPass},
+			{"invalid", withSPF("v=spf1 ip4:192.0.2.0/40 -all"), StatusFail},
+		})
+	})
+
+	t.Run("void lookups", func(t *testing.T) {
+		withVoid := func(n int) func(*collector.DomainInfo) {
+			return func(d *collector.DomainInfo) {
+				d.SPFRecord = spf.Parse("v=spf1 -all")
+				d.SPFRecord.VoidLookups = n
+			}
+		}
+		runRuleCases(t, 26, []ruleCase{
+			{"none", withVoid(0), StatusPass},
+			{"two", withVoid(2), StatusWarn},
+			{"three", withVoid(3), StatusFail},
+		})
+	})
+
+	t.Run("ip ranges", func(t *testing.T) {
+		runRuleCases(t, 27, []ruleCase{
+			{"narrow", withSPF("v=spf1 ip4:192.0.2.0/24 ip6:2001:db8::/48 -all"), StatusPass},
+			{"ipv4 /12", withSPF("v=spf1 ip4:10.0.0.0/12 -all"), StatusWarn},
+			{"ipv6 /24", withSPF("v=spf1 ip6:2001:db8::/24 -all"), StatusWarn},
+			{"ipv4 /4", withSPF("v=spf1 ip4:0.0.0.0/4 -all"), StatusFail},
+			{"excluded range ignored", withSPF("v=spf1 -ip4:0.0.0.0/1 mx -all"), StatusPass},
+		})
+	})
+}
+
+func TestNoMailDomain(t *testing.T) {
+	setup := func(mxs []mx.MXRecord, spfRaw, dmarcRaw string) func(*collector.DomainInfo) {
+		return func(d *collector.DomainInfo) {
+			d.MXRecords = mxs
+			if spfRaw != "" {
+				d.SPFRecord = spf.Parse(spfRaw)
+			}
+			if dmarcRaw != "" {
+				withDMARC(dmarcRaw)(d)
+			}
+		}
+	}
+	nullMX := []mx.MXRecord{{Host: mx.NullMXHost}}
+	runRuleCases(t, 28, []ruleCase{
+		{"receives mail", setup([]mx.MXRecord{host("mx.example.com", "192.0.2.1")}, "", ""), ""},
+		{"null MX locked down", setup(nullMX, "v=spf1 -all", "v=DMARC1; p=reject"), StatusPass},
+		{"null MX unprotected", setup(nullMX, "", ""), StatusWarn},
+		{"null MX, DMARC none", setup(nullMX, "v=spf1 -all", "v=DMARC1; p=none"), StatusWarn},
+		{"no MX unprotected", setup(nil, "", ""), StatusInfo},
+		{"no MX but sends", setup(nil, "v=spf1 include:_spf.example.net -all", ""), StatusInfo},
+		{"MX lookup failed", func(d *collector.DomainInfo) {
+			d.Errors[collector.CheckMX], d.Failed[collector.CheckMX] = "timeout", true
+		}, ""},
+	})
+}
+
+func TestDMARCReportAuthorization(t *testing.T) {
+	withExternal := func(raw string, reports ...dmarc.ExternalReport) func(*collector.DomainInfo) {
+		return func(d *collector.DomainInfo) {
+			withDMARC(raw)(d)
+			d.DMARCRecord.ExternalReports = reports
+		}
+	}
+	runRuleCases(t, 29, []ruleCase{
+		{"no report addresses", withExternal("v=DMARC1; p=reject"), ""},
+		{"own domain", withExternal("v=DMARC1; p=reject; rua=mailto:d@example.com"), StatusPass},
+		{"authorized", withExternal("v=DMARC1; p=reject; rua=mailto:d@vendor.net",
+			dmarc.ExternalReport{URI: "mailto:d@vendor.net", Domain: "vendor.net", Authorized: true}), StatusPass},
+		{"not authorized", withExternal("v=DMARC1; p=reject; rua=mailto:d@vendor.net",
+			dmarc.ExternalReport{URI: "mailto:d@vendor.net", Domain: "vendor.net"}), StatusWarn},
+		{"unsupported", withExternal("v=DMARC1; p=reject; rua=https://x",
+			dmarc.ExternalReport{URI: "https://x", Error: "only mailto"}), StatusWarn},
+		{"unchecked", withExternal("v=DMARC1; p=reject; rua=mailto:d@vendor.net",
+			dmarc.ExternalReport{URI: "mailto:d@vendor.net", Domain: "vendor.net", Unchecked: true}), StatusInfo},
+	})
+}
+
+func TestMXReverseDNS(t *testing.T) {
+	withPTR := func(ptr string, confirmed bool, ptrErr string) func(*collector.DomainInfo) {
+		return func(d *collector.DomainInfo) {
+			r := host("mx.example.com", "192.0.2.1")
+			r.Records[0].PTR, r.Records[0].PTRConfirmed, r.Records[0].PTRError = ptr, confirmed, ptrErr
+			d.MXRecords = []mx.MXRecord{r}
+		}
+	}
+	runRuleCases(t, 30, []ruleCase{
+		{"no MX", nil, ""},
+		{"confirmed", withPTR("mx.example.com", true, ""), StatusPass},
+		{"missing", withPTR("", false, ""), StatusWarn},
+		{"not confirmed", withPTR("other.example.net", false, ""), StatusWarn},
+		{"lookup failed", withPTR("", false, "timeout"), StatusInfo},
+	})
+}
+
+func withMTASTS(mode string, mxPatterns ...string) func(*collector.DomainInfo) {
+	return func(d *collector.DomainInfo) {
+		d.MXRecords = []mx.MXRecord{host("mx1.example.com", "192.0.2.1")}
+		d.MTASTS = &transport.MTASTS{Record: "v=STSv1; id=1", ID: "1", RecordCount: 1}
+		if mode != "" {
+			d.MTASTS.Policy = &transport.Policy{Version: "STSv1", Mode: mode, MX: mxPatterns, MaxAge: 604800}
+		}
+	}
+}
+
+func TestMTASTSRules(t *testing.T) {
+	t.Run("record", func(t *testing.T) {
+		runRuleCases(t, 32, []ruleCase{
+			{"no mail", nil, ""},
+			{"missing", withMX(host("mx1.example.com", "192.0.2.1")), StatusWarn},
+			{"present", withMTASTS("enforce", "mx1.example.com"), StatusPass},
+			{"invalid", func(d *collector.DomainInfo) {
+				withMTASTS("enforce")(d)
+				d.MTASTS.RecordProblems = []string{"the id= tag is missing"}
+			}, StatusFail},
+			{"lookup failed", func(d *collector.DomainInfo) {
+				d.Errors[collector.CheckMTASTS], d.Failed[collector.CheckMTASTS] = "timeout", true
+			}, StatusInfo},
+		})
+	})
+
+	t.Run("policy", func(t *testing.T) {
+		runRuleCases(t, 33, []ruleCase{
+			{"no record", nil, ""},
+			{"enforce", withMTASTS("enforce", "mx1.example.com"), StatusPass},
+			{"testing", withMTASTS("testing", "mx1.example.com"), StatusWarn},
+			{"none", withMTASTS("none"), StatusWarn},
+			{"unreachable", func(d *collector.DomainInfo) {
+				withMTASTS("")(d)
+				d.MTASTS.PolicyError = "HTTP 404"
+			}, StatusFail},
+			{"invalid", func(d *collector.DomainInfo) {
+				withMTASTS("enforce", "mx1.example.com")(d)
+				d.MTASTS.Policy.Problems = []string{"version must be STSv1"}
+			}, StatusFail},
+			{"short max_age", func(d *collector.DomainInfo) {
+				withMTASTS("enforce", "mx1.example.com")(d)
+				d.MTASTS.Policy.MaxAge = 300
+			}, StatusWarn},
+		})
+	})
+
+	t.Run("mx coverage", func(t *testing.T) {
+		runRuleCases(t, 34, []ruleCase{
+			{"covered", withMTASTS("enforce", "mx1.example.com"), StatusPass},
+			{"wildcard", withMTASTS("enforce", "*.example.com"), StatusPass},
+			{"missing in enforce", withMTASTS("enforce", "mx9.example.com"), StatusFail},
+			{"missing in testing", withMTASTS("testing", "mx9.example.com"), StatusWarn},
+			{"mode none", withMTASTS("none"), ""},
+		})
+	})
+}
+
+func TestTLSRPT(t *testing.T) {
+	withMXOnly := withMX(host("mx1.example.com", "192.0.2.1"))
+	runRuleCases(t, 35, []ruleCase{
+		{"no mail", nil, ""},
+		{"missing, no MTA-STS", withMXOnly, StatusInfo},
+		{"missing with MTA-STS", withMTASTS("enforce", "mx1.example.com"), StatusWarn},
+		{"present", func(d *collector.DomainInfo) {
+			withMXOnly(d)
+			d.TLSRPT = &transport.TLSRPT{Record: "v=TLSRPTv1; rua=mailto:tls@example.com", RUA: []string{"mailto:tls@example.com"}}
+		}, StatusPass},
+		{"invalid", func(d *collector.DomainInfo) {
+			withMXOnly(d)
+			d.TLSRPT = &transport.TLSRPT{Record: "v=TLSRPTv1", Problems: []string{"rua missing"}}
+		}, StatusFail},
+	})
+}
+
+func TestDANE(t *testing.T) {
+	withDANE := func(hosts ...transport.DANEHost) func(*collector.DomainInfo) {
+		return func(d *collector.DomainInfo) { d.DANE = hosts }
+	}
+	tlsa := func(usage uint8) []transport.TLSA {
+		return []transport.TLSA{{Usage: usage, Selector: 1, MatchingType: 1, Data: "ab"}}
+	}
+	runRuleCases(t, 36, []ruleCase{
+		{"not looked up", nil, ""},
+		{"not used", withDANE(transport.DANEHost{Host: "mx1", TLSA: []transport.TLSA{}}), StatusInfo},
+		{"all hosts", withDANE(transport.DANEHost{Host: "mx1", TLSA: tlsa(3), Authenticated: true}), StatusPass},
+		{"partial", withDANE(transport.DANEHost{Host: "mx1", TLSA: tlsa(3), Authenticated: true}, transport.DANEHost{Host: "mx2", TLSA: []transport.TLSA{}}), StatusWarn},
+		{"not validated", withDANE(transport.DANEHost{Host: "mx1", TLSA: tlsa(3)}), StatusFail},
+		{"pkix usage", withDANE(transport.DANEHost{Host: "mx1", TLSA: tlsa(1), Authenticated: true}), StatusWarn},
+		{"lookup failed", withDANE(transport.DANEHost{Host: "mx1", Error: "timeout"}), StatusInfo},
+	})
+}
+
+func TestBIMIRules(t *testing.T) {
+	withBIMI := func(raw, dmarcRaw string) func(*collector.DomainInfo) {
+		return func(d *collector.DomainInfo) {
+			d.BIMI = bimi.Parse(raw, "default._bimi.example.com")
+			if dmarcRaw != "" {
+				withDMARC(dmarcRaw)(d)
+			}
+		}
+	}
+	full := "v=BIMI1; l=https://example.com/logo.svg; a=https://example.com/vmc.pem"
+
+	t.Run("record", func(t *testing.T) {
+		runRuleCases(t, 38, []ruleCase{
+			{"missing", nil, StatusInfo},
+			{"full", withBIMI(full, ""), StatusPass},
+			{"no certificate", withBIMI("v=BIMI1; l=https://example.com/logo.svg", ""), StatusWarn},
+			{"declined", withBIMI("v=BIMI1; l=; a=", ""), StatusInfo},
+			{"invalid", withBIMI("v=BIMI1; l=http://example.com/logo.svg", ""), StatusFail},
+		})
+	})
+
+	t.Run("dmarc requirements", func(t *testing.T) {
+		runRuleCases(t, 39, []ruleCase{
+			{"no BIMI", nil, ""},
+			{"reject", withBIMI(full, "v=DMARC1; p=reject"), StatusPass},
+			{"quarantine", withBIMI(full, "v=DMARC1; p=quarantine"), StatusPass},
+			{"no DMARC", withBIMI(full, ""), StatusFail},
+			{"p=none", withBIMI(full, "v=DMARC1; p=none"), StatusFail},
+			{"pct 50", withBIMI(full, "v=DMARC1; p=reject; pct=50"), StatusFail},
+			{"sp=none", withBIMI(full, "v=DMARC1; p=reject; sp=none"), StatusFail},
+		})
+	})
 }

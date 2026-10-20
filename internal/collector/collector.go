@@ -4,12 +4,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sbroekhoven/check-maildomain/internal/bimi"
 	"github.com/sbroekhoven/check-maildomain/internal/dkim"
 	"github.com/sbroekhoven/check-maildomain/internal/dmarc"
 	"github.com/sbroekhoven/check-maildomain/internal/dnssec"
 	"github.com/sbroekhoven/check-maildomain/internal/mx"
 	"github.com/sbroekhoven/check-maildomain/internal/resolver"
 	"github.com/sbroekhoven/check-maildomain/internal/spf"
+	"github.com/sbroekhoven/check-maildomain/internal/transport"
 )
 
 // Check identifies one lookup of the collection; it is the key of Errors and Failed
@@ -21,27 +23,36 @@ const (
 	CheckDKIM   Check = "dkim"
 	CheckDNSSEC Check = "dnssec"
 	CheckMX     Check = "mx"
+	CheckMTASTS Check = "mta-sts"
+	CheckTLSRPT Check = "tls-rpt"
+	CheckDANE   Check = "dane"
+	CheckBIMI   Check = "bimi"
 )
 
 // DomainInfo represents collected DNS information about a domain
 type DomainInfo struct {
-	Domain      string             `json:"domain"`
-	QueryTime   time.Time          `json:"query_time"`
-	MXRecords   []mx.MXRecord      `json:"mx_records"`
-	SPFRecord   *spf.SPFRecord     `json:"spf_record"`
-	DMARCRecord *dmarc.DMARCRecord `json:"dmarc_record"`
-	DMARCPolicy dmarc.DMARCPolicy  `json:"dmarc_policy"`
-	DNSSECInfo  *dnssec.DNSSECInfo `json:"dnssec_info"`
-	DKIMInfo    *dkim.DKIMInfo     `json:"dkim_info"`
-	Errors      map[Check]string   `json:"errors,omitempty"`         // Lookup errors per check, including "record not found"
-	Failed      map[Check]bool     `json:"failed_lookups,omitempty"` // Checks whose lookup failed, so their result is unknown
+	Domain      string               `json:"domain"`
+	QueryTime   time.Time            `json:"query_time"`
+	MXRecords   []mx.MXRecord        `json:"mx_records"`
+	SPFRecord   *spf.SPFRecord       `json:"spf_record"`
+	DMARCRecord *dmarc.DMARCRecord   `json:"dmarc_record"`
+	DMARCPolicy dmarc.DMARCPolicy    `json:"dmarc_policy"`
+	DNSSECInfo  *dnssec.DNSSECInfo   `json:"dnssec_info"`
+	DKIMInfo    *dkim.DKIMInfo       `json:"dkim_info"`
+	MTASTS      *transport.MTASTS    `json:"mta_sts"`
+	TLSRPT      *transport.TLSRPT    `json:"tls_rpt"`
+	DANE        []transport.DANEHost `json:"dane"`
+	BIMI        *bimi.Record         `json:"bimi"`
+	Errors      map[Check]string     `json:"errors,omitempty"`         // Lookup errors per check, including "record not found"
+	Failed      map[Check]bool       `json:"failed_lookups,omitempty"` // Checks whose lookup failed, so their result is unknown
 
 	mu sync.Mutex
 }
 
 // Options tunes what is collected
 type Options struct {
-	DKIMSelectors []string // Extra DKIM selectors to check besides dkim.CommonSelectors
+	DKIMSelectors []string      // Extra DKIM selectors to check besides dkim.CommonSelectors
+	Timeout       time.Duration // Timeout for fetching the MTA-STS policy over HTTPS
 }
 
 // NewDomainInfo creates a new DomainInfo structure
@@ -54,8 +65,9 @@ func NewDomainInfo(domain string) *DomainInfo {
 	}
 }
 
-// CollectDNSInfo gathers all DNS information for the domain. The lookups run concurrently;
-// failures are recorded per check in Errors rather than aborting the collection.
+// CollectDNSInfo gathers all DNS information for the domain. The lookups run concurrently, in two
+// phases: lookups that need the MX hosts (DANE) run after the first phase.
+// Failures are recorded per check in Errors rather than aborting the collection.
 func CollectDNSInfo(domain string, res *resolver.Resolver, opts Options) *DomainInfo {
 	info := NewDomainInfo(domain)
 
@@ -99,8 +111,46 @@ func CollectDNSInfo(domain string, res *resolver.Resolver, opts Options) *Domain
 		return err
 	})
 
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	run(CheckMTASTS, func() (err error) {
+		info.MTASTS, err = transport.LookupMTASTS(domain, res, transport.NewHTTPClient(timeout))
+		return err
+	})
+	run(CheckTLSRPT, func() (err error) {
+		info.TLSRPT, err = transport.LookupTLSRPT(domain, res)
+		return err
+	})
+	run(CheckBIMI, func() (err error) {
+		info.BIMI, err = bimi.Lookup(domain, res)
+		return err
+	})
+	wg.Wait()
+
+	// Second phase: checks on the MX hosts
+	if hosts := info.mailHosts(); len(hosts) > 0 {
+		run(CheckDANE, func() error {
+			info.DANE = transport.LookupDANE(hosts, res)
+			return nil
+		})
+	}
 	wg.Wait()
 	return info
+}
+
+// mailHosts returns the MX host names, without duplicates or a null MX
+func (di *DomainInfo) mailHosts() []string {
+	var hosts []string
+	seen := map[string]bool{}
+	for _, r := range di.MXRecords {
+		if r.Host != mx.NullMXHost && !seen[r.Host] {
+			seen[r.Host] = true
+			hosts = append(hosts, r.Host)
+		}
+	}
+	return hosts
 }
 
 // HasErrors returns true if any errors were encountered during collection

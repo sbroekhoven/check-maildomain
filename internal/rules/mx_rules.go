@@ -33,7 +33,7 @@ func addresses(record mx.MXRecord) []net.IP {
 
 // checkMXExists verifies that MX records exist for the domain
 func checkMXExists(d *collector.DomainInfo) *Outcome {
-	if o := unchecked(d, AreaMX); o != nil {
+	if o := unchecked(d, collector.CheckMX, "MX"); o != nil {
 		return o
 	}
 	switch {
@@ -228,4 +228,89 @@ func plural(n int, word string) string {
 		return fmt.Sprintf("%d %s", n, word)
 	}
 	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// checkNoMailDomain verifies that a domain that receives no mail is also protected against being
+// spoofed: SPF "v=spf1 -all" and DMARC p=reject (M3AAWG parked domain best practice)
+func checkNoMailDomain(d *collector.DomainInfo) *Outcome {
+	if _, failed := d.LookupFailure(collector.CheckMX); failed {
+		return nil // rule 9 already reports the failed lookup
+	}
+	nullMX := mx.IsNullMX(d.MXRecords)
+	if !nullMX && len(d.MXRecords) > 0 {
+		return nil // the domain receives mail
+	}
+
+	spfLocked := d.SPFRecord != nil && len(d.SPFRecord.Terms) == 1 && d.SPFRecord.AllTerm() != nil && d.SPFRecord.AllTerm().Qualifier == '-'
+	dmarcReject := d.DMARCRecord != nil && d.DMARCPolicy.Policy == "reject"
+	receives := "has no MX records"
+	if nullMX {
+		receives = "publishes a null MX"
+	}
+
+	switch {
+	case spfLocked && dmarcReject:
+		return pass("Locked down against spoofing",
+			fmt.Sprintf("The domain %s and publishes SPF \"v=spf1 -all\" and DMARC p=reject, so nobody can send mail as this domain.", receives))
+	case d.SPFRecord != nil && !spfLocked:
+		return inform("Receives no mail but sends",
+			fmt.Sprintf("The domain %s but its SPF record authorizes senders. If it does not send mail either, use \"v=spf1 -all\" and DMARC p=reject.", receives))
+	default:
+		status := inform
+		if nullMX {
+			status = warn // a null MX says the domain is not used for mail at all
+		}
+		var missing []string
+		if !spfLocked {
+			missing = append(missing, "SPF \"v=spf1 -all\"")
+		}
+		if !dmarcReject {
+			missing = append(missing, "DMARC p=reject")
+		}
+		return status("Not protected against spoofing",
+			fmt.Sprintf("The domain %s. If it does not send mail, publish %s so nobody can send mail as this domain.", receives, strings.Join(missing, " and ")))
+	}
+}
+
+// checkMXReverseDNS verifies that every MX address has a PTR record that resolves back to it
+// (forward-confirmed reverse DNS); many receivers distrust servers without it
+func checkMXReverseDNS(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
+	if len(hosts) == 0 {
+		return nil
+	}
+
+	var missing, unconfirmed, failed []string
+	checked := 0
+	for _, host := range hosts {
+		for _, r := range host.Records {
+			if r.Type != "A" && r.Type != "AAAA" {
+				continue
+			}
+			checked++
+			switch {
+			case r.PTRError != "":
+				failed = append(failed, r.Value)
+			case r.PTR == "":
+				missing = append(missing, fmt.Sprintf("%s (%s)", r.Value, host.Host))
+			case !r.PTRConfirmed:
+				unconfirmed = append(unconfirmed, fmt.Sprintf("%s -> %s", r.Value, r.PTR))
+			}
+		}
+	}
+
+	switch {
+	case checked == 0:
+		return nil // rule 10 reports hosts without addresses
+	case len(missing) > 0:
+		return warn("Addresses without reverse DNS",
+			"These MX addresses have no PTR record, which many receivers treat as a spam signal: "+strings.Join(missing, ", ")+". Ask your hosting provider to set one.")
+	case len(unconfirmed) > 0:
+		return warn("Reverse DNS does not match",
+			"The PTR name of these addresses does not resolve back to the same address: "+strings.Join(unconfirmed, ", ")+".")
+	case len(failed) > 0:
+		return inform("Could not be checked", "The reverse lookup failed for: "+strings.Join(failed, ", ")+".")
+	default:
+		return pass("Reverse DNS confirmed", fmt.Sprintf("All %s have a PTR record that resolves back to them.", plural(checked, "MX address")))
+	}
 }

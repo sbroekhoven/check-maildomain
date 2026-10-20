@@ -10,17 +10,22 @@ This tool checks a domain's DNS records related to email security, including:
 - DKIM (DomainKeys Identified Mail)
 - DMARC (Domain-based Message Authentication, Reporting & Conformance)
 - DNSSEC (Domain Name System Security Extensions)
-- MX (Mail Exchange) records
+- MX (Mail Exchange) records and their reverse DNS
+- Transport security: MTA-STS, TLS-RPT and DANE
+- BIMI (Brand Indicators for Message Identification)
 
 It evaluates these configurations against a set of rules and reports each finding as pass, warn, fail or info.
 
 ## Features
 
-- Analyzes SPF syntax, the `all` qualifier, and the RFC 7208 limit of 10 DNS lookups (following nested includes)
-- Checks DMARC syntax, policy strength, `pct`, reporting and subdomain policy, with organizational-domain fallback
-- Detects DKIM keys under common selectors and selectors you supply
+- Analyzes SPF syntax, the `all` qualifier, overly broad IP ranges, and the RFC 7208 limits of 10 DNS lookups and 2 void lookups (following nested includes)
+- Checks DMARC syntax, policy strength, `pct`, reporting, subdomain policy and authorization of external report addresses, with organizational-domain fallback
+- Detects DKIM keys under common selectors and selectors you supply, and checks key size, test mode and SHA-1-only keys
 - Validates the DNSSEC chain (DNSKEY + DS) and signature expiry
-- Examines MX records for redundancy, null MX, CNAME targets, IPv6, and private or loopback addresses
+- Examines MX records for redundancy, null MX, CNAME targets, IPv6, private or loopback addresses and forward-confirmed reverse DNS
+- Checks that a domain that receives no mail is locked down against spoofing (SPF `-all` + DMARC `p=reject`)
+- Fetches and validates the MTA-STS policy and checks that it covers all MX hosts; checks TLS-RPT and DANE (TLSA) records
+- Checks the BIMI record and the DMARC enforcement BIMI requires
 - Console output, plus optional JSON and HTML report files; exit code reflects failures, so it can run in CI
 
 ## Installation
@@ -113,6 +118,10 @@ The console output is always printed to stdout. `-json` and `-html` write files 
 | `-rules` | | List all checks (ID, area, name) and exit |
 | `-version` | | Print version and exit |
 
+## Network Access
+
+Besides DNS queries to the chosen nameserver, the tool makes one other kind of connection: when a domain publishes an MTA-STS record, its policy is fetched from `https://mta-sts.<domain>/.well-known/mta-sts.txt` (no redirects, at most 64 KiB). It never connects to the mail servers themselves.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -149,6 +158,23 @@ When a lookup fails (for example a timeout), the affected checks are reported as
 | 20 | DMARC | Subdomain policy is not `none` |
 | 21 | DNSSEC | DNSKEY signatures not (nearly) expired |
 | 22 | MX | MX hosts are not CNAMEs |
+| 23 | DKIM | Key strength: RSA at least 1024 bits, 2048 recommended |
+| 24 | DKIM | No keys in test mode (`t=y`) or limited to SHA-1 |
+| 25 | SPF | Valid syntax (known mechanisms, valid IP ranges, single `redirect=`) |
+| 26 | SPF | At most 2 void lookups (includes that don't exist) |
+| 27 | SPF | No overly broad `ip4`/`ip6` ranges |
+| 28 | MX | A domain that receives no mail publishes SPF `-all` and DMARC `p=reject` |
+| 29 | DMARC | External report addresses are authorized (RFC 7489 7.1) |
+| 30 | MX | MX addresses have forward-confirmed reverse DNS |
+| 32 | TLS | MTA-STS record published and valid |
+| 33 | TLS | MTA-STS policy reachable, valid and enforced |
+| 34 | TLS | MTA-STS policy covers all MX hosts |
+| 35 | TLS | TLS-RPT reporting configured |
+| 36 | TLS | DANE TLSA records on the MX hosts, DNSSEC-validated |
+| 38 | BIMI | BIMI record valid, with a certificate |
+| 39 | BIMI | DMARC enforced as BIMI requires |
+
+IDs 31 and 37 belonged to checks that were removed (MX blocklists and the SMTP STARTTLS probe); IDs are never reused.
 
 ## Project Layout
 

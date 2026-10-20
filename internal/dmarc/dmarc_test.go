@@ -1,8 +1,11 @@
 package dmarc
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/sbroekhoven/check-maildomain/internal/resolver"
 )
 
 func TestParseDMARCRecord(t *testing.T) {
@@ -61,5 +64,45 @@ func TestOrganizationalDomain(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("OrganizationalDomain(%q) = %q, %v; want %q", domain, got, err, want)
 		}
+	}
+}
+
+func TestReportDomain(t *testing.T) {
+	for uri, want := range map[string]string{
+		"mailto:d@example.com":             "example.com",
+		"mailto:d@Reports.Example.NET!10m": "reports.example.net",
+		"https://example.com/report":       "",
+		"mailto:no-at-sign":                "",
+	} {
+		if got, _ := reportDomain(uri); got != want {
+			t.Errorf("reportDomain(%q) = %q, want %q", uri, got, want)
+		}
+	}
+}
+
+func TestVerifyExternalReports(t *testing.T) {
+	zone := map[string][]string{
+		"example.com._report._dmarc.vendor.net": {"v=DMARC1"},
+	}
+	lookup := func(name string) ([]string, error) {
+		if name == "example.com._report._dmarc.broken.net" {
+			return nil, errors.New("i/o timeout")
+		}
+		if txts, ok := zone[name]; ok {
+			return txts, nil
+		}
+		return nil, &resolver.RcodeError{Name: name, Rcode: 3}
+	}
+
+	record := Parse("v=DMARC1; p=reject; rua=mailto:a@example.com,mailto:b@mail.example.com,mailto:c@vendor.net; ruf=mailto:x@other.org,mailto:y@broken.net,https://x.example", "_dmarc.example.com")
+	got := verifyExternalReports(record, lookup)
+	want := []ExternalReport{
+		{URI: "mailto:c@vendor.net", Domain: "vendor.net", Authorized: true},
+		{URI: "mailto:x@other.org", Domain: "other.org"},
+		{URI: "mailto:y@broken.net", Domain: "broken.net", Unchecked: true, Error: "i/o timeout"},
+		{URI: "https://x.example", Error: "only mailto: report addresses are supported by receivers"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("verifyExternalReports() =\n%+v\nwant\n%+v", got, want)
 	}
 }

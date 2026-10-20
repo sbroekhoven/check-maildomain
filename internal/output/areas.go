@@ -23,6 +23,16 @@ func areaResults(results []rules.RuleResult, area rules.Area) ([]rules.RuleResul
 	return matching, worst
 }
 
+// areaFailure returns the first failed lookup error among the lookups of an area
+func areaFailure(e *rules.Report, area rules.Area) (string, bool) {
+	for _, check := range area.Checks() {
+		if err, failed := e.LookupFailure(check); failed {
+			return err, true
+		}
+	}
+	return "", false
+}
+
 // displayServer drops the default port from a host:port nameserver address
 func displayServer(server string) string {
 	if host, port, err := net.SplitHostPort(server); err == nil && port == "53" {
@@ -34,7 +44,7 @@ func displayServer(server string) string {
 // areaSummary is the one-line description of what was found for an area
 func areaSummary(e *rules.Report, area rules.Area) string {
 	lookupError := func(fallback string) string {
-		if err, failed := e.LookupFailure(area.Check()); failed {
+		if err, failed := areaFailure(e, area); failed {
 			return err
 		}
 		return fallback
@@ -93,6 +103,49 @@ func areaSummary(e *rules.Report, area rules.Area) string {
 			hosts = append(hosts, fmt.Sprintf("%s (%d)", r.Host, r.Priority))
 		}
 		return strings.Join(hosts, ", ")
+
+	case rules.AreaTLS:
+		var parts []string
+		switch {
+		case e.MTASTS != nil && e.MTASTS.Policy != nil:
+			parts = append(parts, "MTA-STS "+e.MTASTS.Policy.Mode)
+		case e.MTASTS != nil:
+			parts = append(parts, "MTA-STS record without policy")
+		default:
+			parts = append(parts, "no MTA-STS")
+		}
+		if e.TLSRPT != nil {
+			parts = append(parts, "TLS-RPT")
+		} else {
+			parts = append(parts, "no TLS-RPT")
+		}
+		dane, failed := 0, 0
+		for _, h := range e.DANE {
+			switch {
+			case h.Error != "":
+				failed++
+			case len(h.TLSA) > 0:
+				dane++
+			}
+		}
+		if len(e.DANE) > 0 {
+			summary := fmt.Sprintf("DANE on %d of %d MX hosts", dane, len(e.DANE))
+			if failed > 0 {
+				summary += fmt.Sprintf(" (lookup failed for %d)", failed)
+			}
+			parts = append(parts, summary)
+		}
+		return strings.Join(parts, " · ")
+
+	case rules.AreaBIMI:
+		switch {
+		case e.BIMI == nil:
+			return lookupError("No BIMI record")
+		case e.BIMI.Declined:
+			return "Logo declined"
+		default:
+			return e.BIMI.Logo
+		}
 	}
 	return ""
 }

@@ -17,6 +17,19 @@ type DMARCRecord struct {
 	Valid    bool              `json:"valid"`    // Whether the record is valid
 	Problems []string          `json:"problems"` // Why the record is not valid
 	Location string            `json:"location"` // Where the record was found
+
+	// ExternalReports lists the report addresses (rua/ruf) outside the domain's organizational
+	// domain, and whether that domain agreed to receive the reports (RFC 7489 7.1)
+	ExternalReports []ExternalReport `json:"external_reports,omitempty"`
+}
+
+// ExternalReport is a DMARC report address in another organizational domain
+type ExternalReport struct {
+	URI        string `json:"uri"`
+	Domain     string `json:"domain"`              // domain of the report address
+	Authorized bool   `json:"authorized"`          // <record domain>._report._dmarc.<domain> publishes v=DMARC1
+	Error      string `json:"error,omitempty"`     // lookup failure or unsupported URI
+	Unchecked  bool   `json:"unchecked,omitempty"` // the authorization could not be verified
 }
 
 // DMARCPolicy represents the parsed policy values
@@ -37,15 +50,75 @@ type DMARCPolicy struct {
 // the record of the organizational domain (RFC 7489 6.6.3) is used instead.
 func LookupDMARC(domain string, res *resolver.Resolver) (*DMARCRecord, error) {
 	record, err := lookupDMARCAt(domain, res)
-	if record != nil || (err != nil && !resolver.IsNotFound(err)) {
-		return record, err
+	if record == nil && (err == nil || resolver.IsNotFound(err)) {
+		if orgDomain, perr := OrganizationalDomain(domain); perr == nil && !strings.EqualFold(orgDomain, domain) {
+			record, err = lookupDMARCAt(orgDomain, res)
+		}
+	}
+	if record != nil {
+		record.ExternalReports = verifyExternalReports(record, res.TXT)
+	}
+	return record, err
+}
+
+// verifyExternalReports checks for every rua/ruf address in another organizational domain that
+// the receiving domain authorized the reports (RFC 7489 7.1)
+func verifyExternalReports(record *DMARCRecord, lookup func(string) ([]string, error)) []ExternalReport {
+	recordDomain := strings.TrimPrefix(record.Location, "_dmarc.")
+	recordOrg, err := OrganizationalDomain(recordDomain)
+	if err != nil {
+		return nil
 	}
 
-	orgDomain, perr := OrganizationalDomain(domain)
-	if perr != nil || strings.EqualFold(orgDomain, domain) {
-		return nil, err
+	var reports []ExternalReport
+	seen := map[string]bool{}
+	for _, tag := range []string{"rua", "ruf"} {
+		for _, uri := range parseDMARCUris(record.Tags[tag]) {
+			if seen[uri] {
+				continue
+			}
+			seen[uri] = true
+
+			domain, ok := reportDomain(uri)
+			if !ok {
+				reports = append(reports, ExternalReport{URI: uri, Error: "only mailto: report addresses are supported by receivers"})
+				continue
+			}
+			if org, err := OrganizationalDomain(domain); err == nil && strings.EqualFold(org, recordOrg) {
+				continue // same organization, no authorization needed
+			}
+
+			report := ExternalReport{URI: uri, Domain: domain}
+			txts, err := lookup(recordDomain + "._report._dmarc." + domain)
+			switch {
+			case err != nil && !resolver.IsNotFound(err):
+				report.Unchecked = true
+				report.Error = err.Error()
+			default:
+				for _, txt := range txts {
+					if strings.HasPrefix(strings.ToLower(txt), "v=dmarc1") {
+						report.Authorized = true
+					}
+				}
+			}
+			reports = append(reports, report)
+		}
 	}
-	return lookupDMARCAt(orgDomain, res)
+	return reports
+}
+
+// reportDomain returns the domain of a mailto: report URI, e.g. "mailto:d@example.com!10m"
+func reportDomain(uri string) (string, bool) {
+	addr, ok := strings.CutPrefix(strings.TrimSpace(uri), "mailto:")
+	if !ok {
+		return "", false
+	}
+	addr, _, _ = strings.Cut(addr, "!") // optional size limit
+	at := strings.LastIndex(addr, "@")
+	if at < 0 || at == len(addr)-1 {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSuffix(addr[at+1:], ".")), true
 }
 
 func lookupDMARCAt(domain string, res *resolver.Resolver) (*DMARCRecord, error) {

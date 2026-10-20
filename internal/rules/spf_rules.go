@@ -81,7 +81,7 @@ func checkSPFAllMechanism(d *collector.DomainInfo) *Outcome {
 
 // checkSPFExists verifies that an SPF record exists for the domain
 func checkSPFExists(d *collector.DomainInfo) *Outcome {
-	if o := unchecked(d, AreaSPF); o != nil {
+	if o := unchecked(d, collector.CheckSPF, "SPF"); o != nil {
 		return o
 	}
 	if d.SPFRecord == nil {
@@ -103,5 +103,65 @@ func checkSPFMultipleRecords(d *collector.DomainInfo) *Outcome {
 			fmt.Sprintf("Found %d SPF records. Publishing more than one v=spf1 record causes a permerror; merge them into a single record.", d.SPFRecord.RecordCount))
 	} else {
 		return pass("Single record", "Exactly one SPF record is published.")
+	}
+}
+
+// checkSPFSyntax verifies that the record only uses valid mechanisms and modifiers (RFC 7208 4.6)
+func checkSPFSyntax(d *collector.DomainInfo) *Outcome {
+	if d.SPFRecord == nil {
+		return nil
+	}
+
+	if errs := d.SPFRecord.SyntaxErrors(); len(errs) > 0 {
+		return fail("Syntax errors",
+			"Receivers reject the whole SPF record (permerror) because of: "+strings.Join(errs, "; ")+".")
+	}
+	return pass("Valid syntax", "All SPF mechanisms and modifiers are valid.")
+}
+
+// checkSPFVoidLookups verifies that at most 2 lookups return no records (RFC 7208 4.6.4)
+func checkSPFVoidLookups(d *collector.DomainInfo) *Outcome {
+	if d.SPFRecord == nil {
+		return nil
+	}
+
+	n := d.SPFRecord.VoidLookups
+	switch {
+	case n > spf.MaxVoidLookups:
+		return fail(fmt.Sprintf("%d void lookups, over the limit of %d", n, spf.MaxVoidLookups),
+			fmt.Sprintf("%d include/redirect targets do not exist or have no records. More than %d makes receivers reject the SPF record (permerror). Remove the stale includes.", n, spf.MaxVoidLookups))
+	case n > 0:
+		return warn(plural(n, "void lookup"),
+			fmt.Sprintf("%s does not exist or has no records (limit is %d). This usually is a stale include; remove it.", plural(n, "include/redirect target"), spf.MaxVoidLookups))
+	default:
+		return pass("No void lookups", "All include/redirect targets exist.")
+	}
+}
+
+// checkSPFIPRanges warns about ip4/ip6 ranges so large they authorize a big part of the internet
+func checkSPFIPRanges(d *collector.DomainInfo) *Outcome {
+	if d.SPFRecord == nil {
+		return nil
+	}
+
+	var huge, large []string
+	for _, r := range d.SPFRecord.IPRanges() {
+		switch {
+		case r.IPv4 && r.Prefix < 8, !r.IPv4 && r.Prefix < 16:
+			huge = append(huge, r.Term)
+		case r.IPv4 && r.Prefix < 16, !r.IPv4 && r.Prefix < 32:
+			large = append(large, r.Term)
+		}
+	}
+
+	switch {
+	case len(huge) > 0:
+		return fail("Extremely broad IP ranges",
+			fmt.Sprintf("These ranges authorize a large part of the internet to send as your domain, which is almost as bad as +all: %s. List only the servers that actually send your mail.", strings.Join(huge, ", ")))
+	case len(large) > 0:
+		return warn("Broad IP ranges",
+			fmt.Sprintf("These ranges authorize tens of thousands of addresses or more: %s. Check that you really own and send from all of them.", strings.Join(large, ", ")))
+	default:
+		return pass("No overly broad IP ranges", "All ip4/ip6 ranges are narrow enough.")
 	}
 }

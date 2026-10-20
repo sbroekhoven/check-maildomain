@@ -90,6 +90,9 @@ func (c *Console) Print(e *rules.Report, nameserver string) {
 
 func (c *Console) printArea(e *rules.Report, area rules.Area) {
 	results, worst := areaResults(e.RuleResults, area)
+	if len(results) == 0 {
+		return // no check applies, e.g. TLS for a domain that receives no mail
+	}
 
 	label := c.paint(styleBold, fmt.Sprintf("%-*s", labelWidth, area))
 

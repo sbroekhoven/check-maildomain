@@ -47,25 +47,32 @@ const (
 	AreaDKIM   Area = "DKIM"
 	AreaDNSSEC Area = "DNSSEC"
 	AreaMX     Area = "MX"
+	AreaTLS    Area = "TLS"
+	AreaBIMI   Area = "BIMI"
 )
 
 // Areas lists all areas in display order
-var Areas = []Area{AreaSPF, AreaDMARC, AreaDKIM, AreaDNSSEC, AreaMX}
+var Areas = []Area{AreaSPF, AreaDMARC, AreaDKIM, AreaDNSSEC, AreaMX, AreaTLS, AreaBIMI}
 
-// Check returns the collector lookup that provides the data for this area
-func (a Area) Check() collector.Check {
+// Checks returns the collector lookups that provide the data for this area
+func (a Area) Checks() []collector.Check {
 	switch a {
 	case AreaSPF:
-		return collector.CheckSPF
+		return []collector.Check{collector.CheckSPF}
 	case AreaDMARC:
-		return collector.CheckDMARC
+		return []collector.Check{collector.CheckDMARC}
 	case AreaDKIM:
-		return collector.CheckDKIM
+		return []collector.Check{collector.CheckDKIM}
 	case AreaDNSSEC:
-		return collector.CheckDNSSEC
-	default:
-		return collector.CheckMX
+		return []collector.Check{collector.CheckDNSSEC}
+	case AreaMX:
+		return []collector.Check{collector.CheckMX}
+	case AreaTLS:
+		return []collector.Check{collector.CheckMTASTS, collector.CheckTLSRPT, collector.CheckDANE}
+	case AreaBIMI:
+		return []collector.Check{collector.CheckBIMI}
 	}
+	return nil
 }
 
 // Rule is a single check on the collected DNS data
@@ -99,17 +106,18 @@ func inform(description, message string) *Outcome {
 	return &Outcome{StatusInfo, description, message}
 }
 
-// unchecked returns an info outcome when the lookup behind area failed, so a rule can't tell
-// whether the record is missing; nil otherwise
-func unchecked(d *collector.DomainInfo, area Area) *Outcome {
-	err, failed := d.LookupFailure(area.Check())
+// unchecked returns an info outcome when the lookup for check failed, so a rule can't tell
+// whether the record is missing; nil otherwise. what names the lookup in the message, e.g. "SPF".
+func unchecked(d *collector.DomainInfo, check collector.Check, what string) *Outcome {
+	err, failed := d.LookupFailure(check)
 	if !failed {
 		return nil
 	}
-	return inform("Could not be checked", fmt.Sprintf("The %s lookup failed, so this could not be checked: %s", area, err))
+	return inform("Could not be checked", fmt.Sprintf("The %s lookup failed, so this could not be checked: %s", what, err))
 }
 
-// registry holds all rules, ordered by ID. IDs are public (JSON, README) and must never be reused.
+// registry holds all rules, ordered by ID. IDs are public (JSON, README) and must never be reused;
+// retired IDs: 31 (MX blocklists) and 37 (SMTP STARTTLS probe).
 var registry = []Rule{
 	{1, AreaSPF, "SPF ptr mechanism", checkSPFPtrUsage},
 	{2, AreaSPF, "SPF DNS lookup limit", checkSPFLookupLimit},
@@ -133,6 +141,21 @@ var registry = []Rule{
 	{20, AreaDMARC, "DMARC subdomain policy", checkDMARCSubdomainPolicy},
 	{21, AreaDNSSEC, "DNSSEC signature expiry", checkDNSSECSignatureExpiry},
 	{22, AreaMX, "MX hosts not CNAMEs", checkMXCNAME},
+	{23, AreaDKIM, "DKIM key strength", checkDKIMKeyStrength},
+	{24, AreaDKIM, "DKIM key flags", checkDKIMKeyFlags},
+	{25, AreaSPF, "SPF syntax", checkSPFSyntax},
+	{26, AreaSPF, "SPF void lookups", checkSPFVoidLookups},
+	{27, AreaSPF, "SPF IP ranges", checkSPFIPRanges},
+	{28, AreaMX, "No-mail domain protection", checkNoMailDomain},
+	{29, AreaDMARC, "DMARC report authorization", checkDMARCReportAuthorization},
+	{30, AreaMX, "MX reverse DNS", checkMXReverseDNS},
+	{32, AreaTLS, "MTA-STS record", checkMTASTSRecord},
+	{33, AreaTLS, "MTA-STS policy", checkMTASTSPolicy},
+	{34, AreaTLS, "MTA-STS covers all MX hosts", checkMTASTSMX},
+	{35, AreaTLS, "TLS reporting (TLS-RPT)", checkTLSRPT},
+	{36, AreaTLS, "DANE for MX hosts", checkDANE},
+	{38, AreaBIMI, "BIMI record", checkBIMIRecord},
+	{39, AreaBIMI, "BIMI DMARC requirements", checkBIMIDMARC},
 }
 
 // Rules returns all rules, ordered by ID

@@ -79,7 +79,9 @@ func (r *Resolver) Query(name string, qtype uint16, dnssec bool) (*dns.Msg, erro
 	m.SetQuestion(dns.Fqdn(name), qtype)
 	m.RecursionDesired = true
 	if dnssec {
+		// DO asks for signatures; AD asks a validating resolver to report whether it validated them
 		m.SetEdns0(4096, true)
+		m.AuthenticatedData = true
 	}
 
 	resp, err := r.exchange(m, r.Server)
