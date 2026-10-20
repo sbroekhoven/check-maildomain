@@ -2,6 +2,9 @@ package rules
 
 import (
 	"net"
+	"os"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,31 +16,41 @@ import (
 	"github.com/sbroekhoven/check-maildomain/internal/spf"
 )
 
-// newInfo returns an empty EnhancedDomainInfo for example.com, modified by setup
-func newInfo(setup func(*collector.DomainInfo)) *EnhancedDomainInfo {
+// newInfo returns empty collected data for example.com, modified by setup
+func newInfo(setup func(*collector.DomainInfo)) *collector.DomainInfo {
 	d := collector.NewDomainInfo("example.com")
 	d.QueryTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	if setup != nil {
 		setup(d)
 	}
-	return NewEnhancedDomainInfo(d)
+	return d
 }
 
-// statusOf runs check and returns the status of ruleID, or "" if the rule produced no result
-func statusOf(t *testing.T, check func(*EnhancedDomainInfo), info *EnhancedDomainInfo, ruleID int) Status {
+// ruleByID returns the registered rule with the given ID
+func ruleByID(t *testing.T, id int) Rule {
 	t.Helper()
-	check(info)
-	var status Status
-	for _, r := range info.RuleResults {
-		if r.RuleID != ruleID {
-			t.Errorf("unexpected rule %d in results", r.RuleID)
+	for _, r := range Rules() {
+		if r.ID == id {
+			return r
 		}
-		status = r.Status
 	}
-	if len(info.RuleResults) > 1 {
-		t.Errorf("rule %d produced %d results", ruleID, len(info.RuleResults))
+	t.Fatalf("no rule with ID %d", id)
+	return Rule{}
+}
+
+// evalRule runs one rule against the data and returns its outcome, or nil if it does not apply
+func evalRule(t *testing.T, id int, d *collector.DomainInfo) *Outcome {
+	t.Helper()
+	return ruleByID(t, id).Check(d)
+}
+
+// statusOf returns the status of rule id, or "" if the rule does not apply
+func statusOf(t *testing.T, id int, d *collector.DomainInfo) Status {
+	t.Helper()
+	if o := evalRule(t, id, d); o != nil {
+		return o.Status
 	}
-	return status
+	return ""
 }
 
 type ruleCase struct {
@@ -46,11 +59,11 @@ type ruleCase struct {
 	want  Status
 }
 
-func runRuleCases(t *testing.T, check func(*EnhancedDomainInfo), ruleID int, cases []ruleCase) {
+func runRuleCases(t *testing.T, ruleID int, cases []ruleCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := statusOf(t, check, newInfo(tc.setup), ruleID); got != tc.want {
+			if got := statusOf(t, ruleID, newInfo(tc.setup)); got != tc.want {
 				t.Errorf("status = %q, want %q", got, tc.want)
 			}
 		})
@@ -63,14 +76,14 @@ func withSPF(raw string) func(*collector.DomainInfo) {
 
 func TestSPFRules(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
-		runRuleCases(t, CheckSPFExists, 6, []ruleCase{
+		runRuleCases(t, 6, []ruleCase{
 			{"missing", nil, StatusFail},
 			{"present", withSPF("v=spf1 -all"), StatusPass},
 		})
 	})
 
 	t.Run("ptr", func(t *testing.T) {
-		runRuleCases(t, CheckSPFPtrUsage, 1, []ruleCase{
+		runRuleCases(t, 1, []ruleCase{
 			{"no record", nil, ""},
 			{"ptr", withSPF("v=spf1 ptr -all"), StatusWarn},
 			{"qualified ptr", withSPF("v=spf1 ?ptr:example.com -all"), StatusWarn},
@@ -79,7 +92,7 @@ func TestSPFRules(t *testing.T) {
 	})
 
 	t.Run("all", func(t *testing.T) {
-		runRuleCases(t, CheckSPFAllMechanism, 3, []ruleCase{
+		runRuleCases(t, 3, []ruleCase{
 			{"-all", withSPF("v=spf1 mx -all"), StatusPass},
 			{"~all", withSPF("v=spf1 mx ~all"), StatusPass},
 			{"?all", withSPF("v=spf1 mx ?all"), StatusWarn},
@@ -98,7 +111,7 @@ func TestSPFRules(t *testing.T) {
 				d.SPFRecord.LookupErrors = problems
 			}
 		}
-		runRuleCases(t, CheckSPFLookupLimit, 2, []ruleCase{
+		runRuleCases(t, 2, []ruleCase{
 			{"within limit", withCount(10), StatusPass},
 			{"over limit", withCount(11), StatusFail},
 			{"problems", withCount(3, "include:x has no SPF record"), StatusWarn},
@@ -106,7 +119,7 @@ func TestSPFRules(t *testing.T) {
 	})
 
 	t.Run("multiple records", func(t *testing.T) {
-		runRuleCases(t, CheckSPFMultipleRecords, 16, []ruleCase{
+		runRuleCases(t, 16, []ruleCase{
 			{"one", withSPF("v=spf1 -all"), StatusPass},
 			{"two", func(d *collector.DomainInfo) {
 				d.SPFRecord = spf.Parse("v=spf1 -all")
@@ -129,7 +142,7 @@ func withDMARCAt(raw, location string) func(*collector.DomainInfo) {
 
 func TestDMARCRules(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
-		runRuleCases(t, CheckDMARCExists, 5, []ruleCase{
+		runRuleCases(t, 5, []ruleCase{
 			{"missing", nil, StatusFail},
 			{"present", withDMARC("v=DMARC1; p=reject"), StatusPass},
 			{"org domain", withDMARCAt("v=DMARC1; p=reject", "_dmarc.example.org"), StatusPass},
@@ -137,7 +150,7 @@ func TestDMARCRules(t *testing.T) {
 	})
 
 	t.Run("policy", func(t *testing.T) {
-		runRuleCases(t, CheckDMARCPolicy, 4, []ruleCase{
+		runRuleCases(t, 4, []ruleCase{
 			{"missing", nil, ""},
 			{"reject", withDMARC("v=DMARC1; p=reject"), StatusPass},
 			{"quarantine uppercase", withDMARC("v=DMARC1; p=QUARANTINE"), StatusWarn},
@@ -147,14 +160,14 @@ func TestDMARCRules(t *testing.T) {
 	})
 
 	t.Run("valid", func(t *testing.T) {
-		runRuleCases(t, CheckDMARCValid, 17, []ruleCase{
+		runRuleCases(t, 17, []ruleCase{
 			{"valid", withDMARC("v=DMARC1; p=reject"), StatusPass},
 			{"invalid", withDMARC("v=DMARC1; p=block"), StatusFail},
 		})
 	})
 
 	t.Run("pct", func(t *testing.T) {
-		runRuleCases(t, CheckDMARCPercentage, 18, []ruleCase{
+		runRuleCases(t, 18, []ruleCase{
 			{"default", withDMARC("v=DMARC1; p=reject"), StatusPass},
 			{"partial", withDMARC("v=DMARC1; p=reject; pct=20"), StatusWarn},
 			{"none policy", withDMARC("v=DMARC1; p=none; pct=20"), ""},
@@ -162,14 +175,14 @@ func TestDMARCRules(t *testing.T) {
 	})
 
 	t.Run("reporting", func(t *testing.T) {
-		runRuleCases(t, CheckDMARCReporting, 19, []ruleCase{
+		runRuleCases(t, 19, []ruleCase{
 			{"rua", withDMARC("v=DMARC1; p=reject; rua=mailto:d@example.com"), StatusPass},
 			{"no rua", withDMARC("v=DMARC1; p=reject"), StatusWarn},
 		})
 	})
 
 	t.Run("subdomain policy", func(t *testing.T) {
-		runRuleCases(t, CheckDMARCSubdomainPolicy, 20, []ruleCase{
+		runRuleCases(t, 20, []ruleCase{
 			{"inherited", withDMARC("v=DMARC1; p=reject"), StatusPass},
 			{"sp none", withDMARC("v=DMARC1; p=reject; sp=none"), StatusWarn},
 		})
@@ -188,7 +201,7 @@ func TestDKIMRules(t *testing.T) {
 			}
 		}
 	}
-	runRuleCases(t, CheckDKIMExists, 7, []ruleCase{
+	runRuleCases(t, 7, []ruleCase{
 		{"unknown", nil, StatusInfo},
 		{"selector found", withDKIM(true, "google"), StatusPass},
 		{"domainkey without known selector", withDKIM(true), StatusWarn},
@@ -205,7 +218,7 @@ func TestDNSSECRules(t *testing.T) {
 	queryTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	t.Run("enabled", func(t *testing.T) {
-		runRuleCases(t, CheckDNSSECEnabled, 8, []ruleCase{
+		runRuleCases(t, 8, []ruleCase{
 			{"unknown", nil, StatusInfo},
 			{"signed and delegated", withDNSSEC(true, true, time.Time{}), StatusPass},
 			{"no DS", withDNSSEC(true, false, time.Time{}), StatusWarn},
@@ -215,7 +228,7 @@ func TestDNSSECRules(t *testing.T) {
 	})
 
 	t.Run("signature expiry", func(t *testing.T) {
-		runRuleCases(t, CheckDNSSECSignatureExpiry, 21, []ruleCase{
+		runRuleCases(t, 21, []ruleCase{
 			{"unsigned", withDNSSEC(false, false, time.Time{}), ""},
 			{"valid", withDNSSEC(true, true, queryTime.Add(30*24*time.Hour)), StatusPass},
 			{"expiring", withDNSSEC(true, true, queryTime.Add(48*time.Hour)), StatusWarn},
@@ -248,7 +261,7 @@ func TestMXRules(t *testing.T) {
 	good := withMX(host("mx1.example.com", "192.0.2.1", "2001:db8::1"), host("mx2.example.com", "192.0.2.2", "2001:db8::2"))
 
 	t.Run("exists", func(t *testing.T) {
-		runRuleCases(t, CheckMXExists, 9, []ruleCase{
+		runRuleCases(t, 9, []ruleCase{
 			{"none", nil, StatusWarn},
 			{"null MX", nullMX, StatusInfo},
 			{"present", good, StatusPass},
@@ -256,7 +269,7 @@ func TestMXRules(t *testing.T) {
 	})
 
 	t.Run("has IPs", func(t *testing.T) {
-		runRuleCases(t, CheckMXHasIPs, 10, []ruleCase{
+		runRuleCases(t, 10, []ruleCase{
 			{"null MX", nullMX, ""},
 			{"resolved", good, StatusPass},
 			{"unresolved", withMX(host("mx.example.com")), StatusWarn},
@@ -265,14 +278,14 @@ func TestMXRules(t *testing.T) {
 	})
 
 	t.Run("IPv6", func(t *testing.T) {
-		runRuleCases(t, CheckMXHasIPv6, 11, []ruleCase{
+		runRuleCases(t, 11, []ruleCase{
 			{"dual stack", good, StatusPass},
 			{"IPv4 only", withMX(host("mx.example.com", "192.0.2.1")), StatusWarn},
 		})
 	})
 
 	t.Run("redundancy", func(t *testing.T) {
-		runRuleCases(t, CheckMXRedundancy, 12, []ruleCase{
+		runRuleCases(t, 12, []ruleCase{
 			{"null MX", nullMX, ""},
 			{"single", withMX(host("mx.example.com", "192.0.2.1")), StatusWarn},
 			{"two", good, StatusPass},
@@ -284,14 +297,14 @@ func TestMXRules(t *testing.T) {
 		for _, n := range []string{"a", "b", "c", "d", "e", "f"} {
 			many = append(many, host(n+".example.com", "192.0.2.1"))
 		}
-		runRuleCases(t, CheckMXTooMany, 13, []ruleCase{
+		runRuleCases(t, 13, []ruleCase{
 			{"two", good, StatusPass},
 			{"six", withMX(many...), StatusWarn},
 		})
 	})
 
 	t.Run("localhost", func(t *testing.T) {
-		runRuleCases(t, CheckMXLocalhost, 14, []ruleCase{
+		runRuleCases(t, 14, []ruleCase{
 			{"public", good, StatusPass},
 			{"localhost name", withMX(host("localhost")), StatusFail},
 			{"loopback range", withMX(host("mx.example.com", "127.0.0.2")), StatusFail},
@@ -300,7 +313,7 @@ func TestMXRules(t *testing.T) {
 	})
 
 	t.Run("private IPs", func(t *testing.T) {
-		runRuleCases(t, CheckMXPrivateIPs, 15, []ruleCase{
+		runRuleCases(t, 15, []ruleCase{
 			{"public", good, StatusPass},
 			{"RFC 1918", withMX(host("mx.example.com", "10.1.2.3")), StatusFail},
 			{"172.16/12 edge", withMX(host("mx.example.com", "172.31.255.255")), StatusFail},
@@ -311,61 +324,111 @@ func TestMXRules(t *testing.T) {
 	})
 
 	t.Run("CNAME", func(t *testing.T) {
-		runRuleCases(t, CheckMXCNAME, 22, []ruleCase{
+		runRuleCases(t, 22, []ruleCase{
 			{"no CNAME", good, StatusPass},
 			{"CNAME", withMX(host("mx.example.com", "mail.example.net", "192.0.2.1")), StatusWarn},
 		})
 	})
 }
 
-func TestApplyAllRulesOrdered(t *testing.T) {
-	info := newInfo(withSPF("v=spf1 -all"))
-	ApplyAllRules(info)
-	for i := 1; i < len(info.RuleResults); i++ {
-		if info.RuleResults[i-1].RuleID > info.RuleResults[i].RuleID {
-			t.Fatalf("results not sorted by rule ID: %d before %d", info.RuleResults[i-1].RuleID, info.RuleResults[i].RuleID)
+func TestEvaluate(t *testing.T) {
+	report := Evaluate(newInfo(withSPF("v=spf1 -all")))
+	for i := 1; i < len(report.RuleResults); i++ {
+		if report.RuleResults[i-1].RuleID >= report.RuleResults[i].RuleID {
+			t.Fatalf("results not sorted by rule ID: %d before %d", report.RuleResults[i-1].RuleID, report.RuleResults[i].RuleID)
 		}
 	}
-	if !info.HasStatus(StatusFail) {
+	for _, r := range report.RuleResults {
+		if rule := ruleByID(t, r.RuleID); r.Area != rule.Area {
+			t.Errorf("rule %d result has area %q, want %q", r.RuleID, r.Area, rule.Area)
+		}
+	}
+	if !report.HasStatus(StatusFail) || report.Worst() != StatusFail {
 		t.Error("expected failures for a domain without DMARC")
 	}
 }
 
+func TestRegistry(t *testing.T) {
+	areas := map[Area]bool{}
+	for _, a := range Areas {
+		areas[a] = true
+	}
+
+	prev := 0
+	for _, r := range Rules() {
+		if r.ID <= prev {
+			t.Errorf("rule %d: IDs must be unique and ascending (previous %d)", r.ID, prev)
+		}
+		prev = r.ID
+		if !areas[r.Area] || r.Name == "" || r.Check == nil {
+			t.Errorf("rule %d is incomplete: %+v", r.ID, r)
+		}
+	}
+}
+
+// TestRegistryMatchesReadme keeps the rule table in README.md in sync with the registry
+func TestRegistryMatchesReadme(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := map[int]Area{}
+	for _, m := range regexp.MustCompile(`(?m)^\| (\d+) \| (\w+) \|`).FindAllStringSubmatch(string(readme), -1) {
+		id, _ := strconv.Atoi(m[1])
+		documented[id] = Area(m[2])
+	}
+
+	for _, r := range Rules() {
+		if area, ok := documented[r.ID]; !ok || area != r.Area {
+			t.Errorf("rule %d (%s, %s) is missing or has the wrong area in the README rule table", r.ID, r.Area, r.Name)
+		}
+		delete(documented, r.ID)
+	}
+	for id := range documented {
+		t.Errorf("README documents rule %d, which does not exist", id)
+	}
+}
+
+func TestStatusSeverity(t *testing.T) {
+	order := []Status{StatusPass, StatusInfo, StatusWarn, StatusFail}
+	for i := 1; i < len(order); i++ {
+		if Worst(order[i-1], order[i]) != order[i] || Worst(order[i], order[i-1]) != order[i] {
+			t.Errorf("Worst(%s, %s) should be %s", order[i-1], order[i], order[i])
+		}
+	}
+}
+
 func TestFailedLookupsAreUnchecked(t *testing.T) {
-	failed := func(check string) func(*collector.DomainInfo) {
+	failed := func(check collector.Check) func(*collector.DomainInfo) {
 		return func(d *collector.DomainInfo) {
 			d.Errors[check] = "DNS query failed: i/o timeout"
 			d.Failed[check] = true
 		}
 	}
-	notFound := func(check string) func(*collector.DomainInfo) {
+	notFound := func(check collector.Check) func(*collector.DomainInfo) {
 		return func(d *collector.DomainInfo) {
 			d.Errors[check] = "no record found"
 		}
 	}
 
 	tests := []struct {
-		check  func(*EnhancedDomainInfo)
 		ruleID int
-		key    string
+		area   Area
 		absent Status // status when the record simply does not exist
 	}{
-		{CheckSPFExists, 6, "spf", StatusFail},
-		{CheckDMARCExists, 5, "dmarc", StatusFail},
-		{CheckMXExists, 9, "mx", StatusWarn},
-		{CheckDKIMExists, 7, "dkim", StatusInfo},
-		{CheckDNSSECEnabled, 8, "dnssec", StatusInfo},
+		{6, AreaSPF, StatusFail},
+		{5, AreaDMARC, StatusFail},
+		{9, AreaMX, StatusWarn},
+		{7, AreaDKIM, StatusInfo},
+		{8, AreaDNSSEC, StatusInfo},
 	}
 	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			info := newInfo(failed(tt.key))
-			if got := statusOf(t, tt.check, info, tt.ruleID); got != StatusInfo {
-				t.Errorf("failed lookup: status = %q, want info", got)
+		t.Run(string(tt.area), func(t *testing.T) {
+			o := evalRule(t, tt.ruleID, newInfo(failed(tt.area.Check())))
+			if o == nil || o.Status != StatusInfo || o.Description != "Could not be checked" {
+				t.Errorf("failed lookup: outcome = %+v, want info 'Could not be checked'", o)
 			}
-			if got := info.RuleResults[0].Description; got != "Could not be checked" {
-				t.Errorf("failed lookup: description = %q", got)
-			}
-			if got := statusOf(t, tt.check, newInfo(notFound(tt.key)), tt.ruleID); got != tt.absent {
+			if got := statusOf(t, tt.ruleID, newInfo(notFound(tt.area.Check()))); got != tt.absent {
 				t.Errorf("record not found: status = %q, want %q", got, tt.absent)
 			}
 		})

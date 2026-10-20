@@ -1,4 +1,4 @@
-package main
+package output
 
 import (
 	"embed"
@@ -63,24 +63,23 @@ type dataTable struct {
 	Rows [][]string
 }
 
-// writeHTML renders the results as a self-contained HTML page
-func writeHTML(w io.Writer, e *rules.EnhancedDomainInfo, nameserver string) error {
-	return reportTemplate.Execute(w, buildReport(e, nameserver))
+// WriteHTML renders the results as a self-contained HTML page. version is shown in the footer.
+func WriteHTML(w io.Writer, e *rules.Report, nameserver, version string) error {
+	return reportTemplate.Execute(w, buildReport(e, nameserver, version))
 }
 
-func buildReport(e *rules.EnhancedDomainInfo, nameserver string) reportData {
+func buildReport(e *rules.Report, nameserver, version string) reportData {
 	data := reportData{
 		Domain:     e.Domain,
 		Checked:    e.QueryTime.Format("2 January 2006, 15:04 MST"),
 		Nameserver: displayServer(nameserver),
 		Version:    version,
-		Worst:      rules.StatusPass,
 	}
 
+	data.Worst = e.Worst()
 	counts := map[rules.Status]int{}
 	for _, r := range e.RuleResults {
 		counts[r.Status]++
-		data.Worst = worstStatus(data.Worst, r.Status)
 	}
 	data.Counts = []countChip{
 		{rules.StatusPass, fmt.Sprintf("%d passed", counts[rules.StatusPass])},
@@ -104,7 +103,7 @@ func buildReport(e *rules.EnhancedDomainInfo, nameserver string) reportData {
 		results, worst := areaResults(e.RuleResults, area)
 		ra := reportArea{
 			Area:    area,
-			ID:      strings.ToLower(string(area)),
+			ID:      string(area.Check()),
 			Worst:   worst,
 			Summary: areaSummary(e, area),
 			Results: results,
@@ -112,7 +111,7 @@ func buildReport(e *rules.EnhancedDomainInfo, nameserver string) reportData {
 		addFound(&ra, e)
 
 		// Show failed lookups as a note, unless the summary already shows the error
-		if err, failed := e.LookupFailure(ra.ID); failed && err != ra.Summary {
+		if err, failed := e.LookupFailure(area.Check()); failed && err != ra.Summary {
 			ra.Error = err
 		}
 		data.Areas = append(data.Areas, ra)
@@ -122,7 +121,7 @@ func buildReport(e *rules.EnhancedDomainInfo, nameserver string) reportData {
 }
 
 // addFound fills in the "Found" section of an area with the collected DNS data
-func addFound(ra *reportArea, e *rules.EnhancedDomainInfo) {
+func addFound(ra *reportArea, e *rules.Report) {
 	add := func(label, value string, mono bool) {
 		ra.Facts = append(ra.Facts, fact{label, value, mono})
 	}

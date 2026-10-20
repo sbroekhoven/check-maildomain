@@ -5,15 +5,16 @@ import (
 	"net"
 	"strings"
 
+	"github.com/sbroekhoven/check-maildomain/internal/collector"
 	"github.com/sbroekhoven/check-maildomain/internal/mx"
 )
 
 // mailHosts returns the MX records to run host checks on; none for a missing or null MX
-func mailHosts(info *EnhancedDomainInfo) []mx.MXRecord {
-	if mx.IsNullMX(info.MXRecords) {
+func mailHosts(d *collector.DomainInfo) []mx.MXRecord {
+	if mx.IsNullMX(d.MXRecords) {
 		return nil
 	}
-	return info.MXRecords
+	return d.MXRecords
 }
 
 // addresses returns the parsed A/AAAA addresses of an MX host
@@ -30,29 +31,29 @@ func addresses(record mx.MXRecord) []net.IP {
 	return ips
 }
 
-// CheckMXExists verifies that MX records exist for the domain
-func CheckMXExists(info *EnhancedDomainInfo) {
-	if info.addIfLookupFailed(9, AreaMX, "mx") {
-		return
+// checkMXExists verifies that MX records exist for the domain
+func checkMXExists(d *collector.DomainInfo) *Outcome {
+	if o := unchecked(d, AreaMX); o != nil {
+		return o
 	}
 	switch {
-	case mx.IsNullMX(info.MXRecords):
-		info.add(9, AreaMX, "Null MX: accepts no mail", StatusInfo,
+	case mx.IsNullMX(d.MXRecords):
+		return inform("Null MX: accepts no mail",
 			"Domain publishes a null MX (RFC 7505): it explicitly accepts no email.")
-	case len(info.MXRecords) == 0:
-		info.add(9, AreaMX, "No MX records", StatusWarn,
+	case len(d.MXRecords) == 0:
+		return warn("No MX records",
 			"No MX records found. If this domain is used for email, add MX records to specify mail servers. If it never receives mail, publish a null MX (\"MX 0 .\").")
 	default:
-		info.add(9, AreaMX, plural(len(info.MXRecords), "MX record"), StatusPass,
-			fmt.Sprintf("Found %d MX records for this domain.", len(info.MXRecords)))
+		return pass(plural(len(d.MXRecords), "MX record"),
+			fmt.Sprintf("Found %d MX records for this domain.", len(d.MXRecords)))
 	}
 }
 
-// CheckMXHasIPs verifies that each MX record has at least one IP address
-func CheckMXHasIPs(info *EnhancedDomainInfo) {
-	hosts := mailHosts(info)
+// checkMXHasIPs verifies that each MX record has at least one IP address
+func checkMXHasIPs(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 
 	badMXHosts := []string{}
@@ -63,18 +64,18 @@ func CheckMXHasIPs(info *EnhancedDomainInfo) {
 	}
 
 	if len(badMXHosts) > 0 {
-		info.add(10, AreaMX, "Hosts without IP addresses", StatusWarn,
+		return warn("Hosts without IP addresses",
 			fmt.Sprintf("The following MX hosts could not be resolved to IP addresses: %s", strings.Join(badMXHosts, ", ")))
 	} else {
-		info.add(10, AreaMX, "All hosts resolve", StatusPass, "All MX records resolve to valid IP addresses.")
+		return pass("All hosts resolve", "All MX records resolve to valid IP addresses.")
 	}
 }
 
-// CheckMXHasIPv6 verifies that each MX record has at least one IPv6 address
-func CheckMXHasIPv6(info *EnhancedDomainInfo) {
-	hosts := mailHosts(info)
+// checkMXHasIPv6 verifies that each MX record has at least one IPv6 address
+func checkMXHasIPv6(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 
 	badMXHosts := []string{}
@@ -92,53 +93,53 @@ func CheckMXHasIPv6(info *EnhancedDomainInfo) {
 	}
 
 	if len(badMXHosts) > 0 {
-		info.add(11, AreaMX, "Hosts without IPv6", StatusWarn,
+		return warn("Hosts without IPv6",
 			fmt.Sprintf("The following MX hosts could not be resolved to IPv6 addresses: %s", strings.Join(badMXHosts, ", ")))
 	} else {
-		info.add(11, AreaMX, "All hosts have IPv6", StatusPass, "All MX records resolve to IPv6 addresses.")
+		return pass("All hosts have IPv6", "All MX records resolve to IPv6 addresses.")
 	}
 }
 
-// CheckMXRedundancy verifies that more than one MX record exists for redundancy
-func CheckMXRedundancy(info *EnhancedDomainInfo) {
-	hosts := mailHosts(info)
+// checkMXRedundancy verifies that more than one MX record exists for redundancy
+func checkMXRedundancy(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
 	switch len(hosts) {
 	case 0:
-		return
+		return nil
 	case 1:
-		info.add(12, AreaMX, "Single MX host, no backup", StatusWarn,
+		return warn("Single MX host, no backup",
 			"Only one MX record found. For better email reliability, consider adding at least one backup MX server.")
 	default:
-		info.add(12, AreaMX, "Redundant MX hosts", StatusPass,
+		return pass("Redundant MX hosts",
 			fmt.Sprintf("Found %d MX records, which provides redundancy for email delivery.", len(hosts)))
 	}
 }
 
-// CheckMXTooMany verifies that there aren't too many MX records which could indicate misconfiguration
-func CheckMXTooMany(info *EnhancedDomainInfo) {
-	hosts := mailHosts(info)
+// checkMXTooMany verifies that there aren't too many MX records which could indicate misconfiguration
+func checkMXTooMany(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 
 	// Define the threshold for too many MX records
 	const maxRecommendedMX = 5
 
 	if len(hosts) > maxRecommendedMX {
-		info.add(13, AreaMX, "More than 5 MX records", StatusWarn,
+		return warn("More than 5 MX records",
 			fmt.Sprintf("Found %d MX records, which is more than the recommended maximum of %d. Too many MX records may indicate a misconfiguration.",
 				len(hosts), maxRecommendedMX))
 	} else {
-		info.add(13, AreaMX, "At most 5 MX records", StatusPass,
+		return pass("At most 5 MX records",
 			fmt.Sprintf("Found %d MX records, which is within the recommended range (1-%d).", len(hosts), maxRecommendedMX))
 	}
 }
 
-// CheckMXLocalhost verifies that MX records don't point to localhost
-func CheckMXLocalhost(info *EnhancedDomainInfo) {
-	hosts := mailHosts(info)
+// checkMXLocalhost verifies that MX records don't point to localhost
+func checkMXLocalhost(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 
 	var badMXs []string
@@ -155,19 +156,19 @@ func CheckMXLocalhost(info *EnhancedDomainInfo) {
 	}
 
 	if len(badMXs) > 0 {
-		info.add(14, AreaMX, "Points to localhost", StatusFail,
+		return fail("Points to localhost",
 			fmt.Sprintf("Found %d MX records pointing to localhost or loopback addresses: %s. This is a misconfiguration that will prevent email delivery.",
 				len(badMXs), strings.Join(badMXs, ", ")))
 	} else {
-		info.add(14, AreaMX, "No localhost targets", StatusPass, "No MX records pointing to localhost found.")
+		return pass("No localhost targets", "No MX records pointing to localhost found.")
 	}
 }
 
-// CheckMXPrivateIPs verifies that MX records don't resolve to private IP addresses
-func CheckMXPrivateIPs(info *EnhancedDomainInfo) {
-	hosts := mailHosts(info)
+// checkMXPrivateIPs verifies that MX records don't resolve to private IP addresses
+func checkMXPrivateIPs(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 
 	var details []string
@@ -184,18 +185,18 @@ func CheckMXPrivateIPs(info *EnhancedDomainInfo) {
 	}
 
 	if len(details) > 0 {
-		info.add(15, AreaMX, "Private IP addresses", StatusFail,
+		return fail("Private IP addresses",
 			fmt.Sprintf("Found %d MX records resolving to private IP addresses. %s", len(details), strings.Join(details, "; ")))
 	} else {
-		info.add(15, AreaMX, "No private IP addresses", StatusPass, "No MX records resolving to private IP addresses found.")
+		return pass("No private IP addresses", "No MX records resolving to private IP addresses found.")
 	}
 }
 
-// CheckMXCNAME verifies that MX hosts are not aliases (RFC 2181 10.3, RFC 5321 5.1)
-func CheckMXCNAME(info *EnhancedDomainInfo) {
-	hosts := mailHosts(info)
+// checkMXCNAME verifies that MX hosts are not aliases (RFC 2181 10.3, RFC 5321 5.1)
+func checkMXCNAME(d *collector.DomainInfo) *Outcome {
+	hosts := mailHosts(d)
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 
 	var aliases []string
@@ -209,10 +210,10 @@ func CheckMXCNAME(info *EnhancedDomainInfo) {
 	}
 
 	if len(aliases) > 0 {
-		info.add(22, AreaMX, "Hosts are CNAMEs", StatusWarn,
+		return warn("Hosts are CNAMEs",
 			fmt.Sprintf("MX records must point to a host name with A/AAAA records, not to a CNAME: %s", strings.Join(aliases, ", ")))
 	} else {
-		info.add(22, AreaMX, "No CNAME targets", StatusPass, "No MX records point to a CNAME.")
+		return pass("No CNAME targets", "No MX records point to a CNAME.")
 	}
 }
 

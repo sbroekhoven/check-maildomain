@@ -30,4 +30,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
-output/
+/output/
+
+# Locally built binary
+/check-maildomain
+/temp/

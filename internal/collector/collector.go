@@ -12,6 +12,17 @@ import (
 	"github.com/sbroekhoven/check-maildomain/internal/spf"
 )
 
+// Check identifies one lookup of the collection; it is the key of Errors and Failed
+type Check string
+
+const (
+	CheckSPF    Check = "spf"
+	CheckDMARC  Check = "dmarc"
+	CheckDKIM   Check = "dkim"
+	CheckDNSSEC Check = "dnssec"
+	CheckMX     Check = "mx"
+)
+
 // DomainInfo represents collected DNS information about a domain
 type DomainInfo struct {
 	Domain      string             `json:"domain"`
@@ -22,8 +33,8 @@ type DomainInfo struct {
 	DMARCPolicy dmarc.DMARCPolicy  `json:"dmarc_policy"`
 	DNSSECInfo  *dnssec.DNSSECInfo `json:"dnssec_info"`
 	DKIMInfo    *dkim.DKIMInfo     `json:"dkim_info"`
-	Errors      map[string]string  `json:"errors,omitempty"`         // Lookup errors per check, including "record not found"
-	Failed      map[string]bool    `json:"failed_lookups,omitempty"` // Checks whose lookup failed, so their result is unknown
+	Errors      map[Check]string   `json:"errors,omitempty"`         // Lookup errors per check, including "record not found"
+	Failed      map[Check]bool     `json:"failed_lookups,omitempty"` // Checks whose lookup failed, so their result is unknown
 
 	mu sync.Mutex
 }
@@ -38,8 +49,8 @@ func NewDomainInfo(domain string) *DomainInfo {
 	return &DomainInfo{
 		Domain:    domain,
 		QueryTime: time.Now(),
-		Errors:    make(map[string]string),
-		Failed:    make(map[string]bool),
+		Errors:    make(map[Check]string),
+		Failed:    make(map[Check]bool),
 	}
 }
 
@@ -49,7 +60,7 @@ func CollectDNSInfo(domain string, res *resolver.Resolver, opts Options) *Domain
 	info := NewDomainInfo(domain)
 
 	var wg sync.WaitGroup
-	run := func(name string, lookup func() error) {
+	run := func(name Check, lookup func() error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -64,26 +75,26 @@ func CollectDNSInfo(domain string, res *resolver.Resolver, opts Options) *Domain
 		}()
 	}
 
-	run("mx", func() (err error) {
+	run(CheckMX, func() (err error) {
 		info.MXRecords, err = mx.LookupMX(domain, res)
 		return err
 	})
-	run("spf", func() (err error) {
+	run(CheckSPF, func() (err error) {
 		info.SPFRecord, err = spf.LookupSPF(domain, res)
 		return err
 	})
-	run("dmarc", func() (err error) {
+	run(CheckDMARC, func() (err error) {
 		info.DMARCRecord, err = dmarc.LookupDMARC(domain, res)
 		if info.DMARCRecord != nil {
 			info.DMARCPolicy = info.DMARCRecord.GetPolicy()
 		}
 		return err
 	})
-	run("dnssec", func() (err error) {
+	run(CheckDNSSEC, func() (err error) {
 		info.DNSSECInfo, err = dnssec.CheckDNSSEC(domain, res)
 		return err
 	})
-	run("dkim", func() (err error) {
+	run(CheckDKIM, func() (err error) {
 		info.DKIMInfo, err = dkim.CheckDKIM(domain, res, opts.DKIMSelectors)
 		return err
 	})
@@ -102,8 +113,8 @@ func (di *DomainInfo) HasFailedLookups() bool {
 	return len(di.Failed) > 0
 }
 
-// LookupFailure returns the error of a failed lookup for a check ("spf", "mx", ...), if it failed
-func (di *DomainInfo) LookupFailure(check string) (string, bool) {
+// LookupFailure returns the error of a failed lookup for a check, if it failed
+func (di *DomainInfo) LookupFailure(check Check) (string, bool) {
 	if !di.Failed[check] {
 		return "", false
 	}

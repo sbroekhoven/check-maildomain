@@ -1,4 +1,4 @@
-package main
+package output
 
 import (
 	"reflect"
@@ -46,13 +46,12 @@ func TestConsolePrint(t *testing.T) {
 	info := collector.NewDomainInfo("example.com")
 	info.QueryTime = time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
 	info.SPFRecord = spf.Parse("v=spf1 mx ?all")
-	e := rules.NewEnhancedDomainInfo(info)
-	rules.ApplyAllRules(e)
+	e := rules.Evaluate(info)
 
 	render := func(verbose bool) string {
 		var out strings.Builder
-		c := &console{w: &out, verbose: verbose, width: 100}
-		c.print(e, "8.8.8.8:53")
+		c := &Console{w: &out, verbose: verbose, width: 100}
+		c.Print(e, "8.8.8.8:53")
 		return out.String()
 	}
 

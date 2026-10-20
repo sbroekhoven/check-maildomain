@@ -21,12 +21,12 @@ It evaluates these configurations against a set of rules and reports each findin
 - Detects DKIM keys under common selectors and selectors you supply
 - Validates the DNSSEC chain (DNSKEY + DS) and signature expiry
 - Examines MX records for redundancy, null MX, CNAME targets, IPv6, and private or loopback addresses
-- Console or JSON output; exit code reflects failures, so it can run in CI
+- Console output, plus optional JSON and HTML report files; exit code reflects failures, so it can run in CI
 
 ## Installation
 
 ```bash
-go install github.com/sbroekhoven/check-maildomain@latest
+go install github.com/sbroekhoven/check-maildomain/cmd/check-maildomain@latest
 ```
 
 Or download a binary from the [releases page](https://github.com/sbroekhoven/check-maildomain/releases), or build from source:
@@ -34,7 +34,7 @@ Or download a binary from the [releases page](https://github.com/sbroekhoven/che
 ```bash
 git clone https://github.com/sbroekhoven/check-maildomain.git
 cd check-maildomain
-go build -o check-maildomain
+go build -o check-maildomain ./cmd/check-maildomain
 ```
 
 ## Usage
@@ -50,9 +50,14 @@ check-maildomain -nameserver "[2606:4700:4700::1111]:53" example.com
 # Also check your own DKIM selectors
 check-maildomain -selector s2024 -selector mailjet example.com
 
-# JSON output, optionally also saved to a folder
-check-maildomain -json example.com | jq .
-check-maildomain -output results example.com
+# Also save the results as JSON (missing folders are created)
+check-maildomain -json results/example.json example.com
+
+# JSON and HTML report at the same time
+check-maildomain -json reports/example.json -html reports/example.html example.com
+
+# A folder (trailing /) gets a timestamped file name, e.g. results/20261021001500-example.com.json
+check-maildomain -json results/ example.com
 ```
 
 ## Example Output
@@ -89,7 +94,7 @@ Results are grouped per area: `✓` pass, `!` warning, `✗` fail, `i` info. Det
 check-maildomain -html report.html example.com
 ```
 
-Writes a single, self-contained HTML file (inline CSS, no external assets) that you can email, attach to a ticket or archive. It shows an overall verdict, then one card per area with the records that were found (SPF record and lookup count, DMARC tags, DKIM selectors, DNSSEC keys, an MX table with addresses) and all checks. Problems are expanded; passing checks can be clicked open. The report follows the system light/dark theme, works on phones, and prints cleanly. The console output is still printed, unless you use `-html -` to write the report to stdout.
+Writes a single, self-contained HTML file (inline CSS, no external assets) that you can email, attach to a ticket or archive. It shows an overall verdict, then one card per area with the records that were found (SPF record and lookup count, DMARC tags, DKIM selectors, DNSSEC keys, an MX table with addresses) and all checks. Problems are expanded; passing checks can be clicked open. The report follows the system light/dark theme, works on phones, and prints cleanly. The console output is printed as well, and `-json` can be combined with it.
 
 ## Command-line Options
 
@@ -101,9 +106,11 @@ Writes a single, self-contained HTML file (inline CSS, no external assets) that 
 | `-timeout` | `3s` | Timeout per DNS query |
 | `-selector` | | Extra DKIM selector to check (repeatable, or comma-separated) |
 | `-v` | `false` | Also show the details of passing checks |
-| `-json` | `false` | Output results as JSON |
-| `-html` | | Write an HTML report to this file (`-` for stdout) |
-| `-output` | | Folder to save JSON results to (implies `-json`) |
+| `-json` | | Also write the results as JSON to this file, or into this folder (`dir/`) |
+| `-html` | | Also write an HTML report to this file, or into this folder (`dir/`) |
+
+The console output is always printed to stdout. `-json` and `-html` write files in addition to it and can be used together; the paths they were saved to are printed on stderr.
+| `-rules` | | List all checks (ID, area, name) and exit |
 | `-version` | | Print version and exit |
 
 ## Exit Codes
@@ -111,7 +118,7 @@ Writes a single, self-contained HTML file (inline CSS, no external assets) that 
 | Code | Meaning |
 |------|---------|
 | 0 | No rule failed |
-| 1 | Usage or runtime error, or a DNS lookup failed so the results are incomplete |
+| 1 | Usage or runtime error, an output file could not be written, or a DNS lookup failed so the results are incomplete |
 | 2 | At least one rule failed |
 
 When a lookup fails (for example a timeout), the affected checks are reported as "Could not be checked" (info) instead of as a missing record, the failed lookups are listed in `failed_lookups` in the JSON output, and a warning is printed to stderr. A record that simply does not exist is not a failed lookup and is reported by the normal checks.
@@ -142,6 +149,18 @@ When a lookup fails (for example a timeout), the affected checks are reported as
 | 20 | DMARC | Subdomain policy is not `none` |
 | 21 | DNSSEC | DNSKEY signatures not (nearly) expired |
 | 22 | MX | MX hosts are not CNAMEs |
+
+## Project Layout
+
+```
+cmd/check-maildomain/   command-line entry point: flags, output selection, exit codes
+internal/resolver/      DNS queries (UDP with TCP retry, optional fallback nameserver)
+internal/spf/ dmarc/ dkim/ dnssec/ mx/
+                        lookups and parsing per mail mechanism
+internal/collector/     runs all lookups concurrently into one DomainInfo
+internal/rules/         the checks, producing pass/warn/fail/info results
+internal/output/        terminal output and the HTML report (template in templates/)
+```
 
 ## Development
 

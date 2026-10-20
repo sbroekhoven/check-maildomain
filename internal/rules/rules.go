@@ -2,7 +2,6 @@ package rules
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/sbroekhoven/check-maildomain/internal/collector"
 )
@@ -16,6 +15,28 @@ const (
 	StatusFail Status = "fail"
 	StatusInfo Status = "info"
 )
+
+// Severity orders statuses from harmless (0) to worst
+func (s Status) Severity() int {
+	switch s {
+	case StatusPass:
+		return 0
+	case StatusInfo:
+		return 1
+	case StatusWarn:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// Worst returns the more severe of two statuses
+func Worst(a, b Status) Status {
+	if b.Severity() > a.Severity() {
+		return b
+	}
+	return a
+}
 
 // Area is the part of the mail setup a rule checks
 type Area string
@@ -31,6 +52,94 @@ const (
 // Areas lists all areas in display order
 var Areas = []Area{AreaSPF, AreaDMARC, AreaDKIM, AreaDNSSEC, AreaMX}
 
+// Check returns the collector lookup that provides the data for this area
+func (a Area) Check() collector.Check {
+	switch a {
+	case AreaSPF:
+		return collector.CheckSPF
+	case AreaDMARC:
+		return collector.CheckDMARC
+	case AreaDKIM:
+		return collector.CheckDKIM
+	case AreaDNSSEC:
+		return collector.CheckDNSSEC
+	default:
+		return collector.CheckMX
+	}
+}
+
+// Rule is a single check on the collected DNS data
+type Rule struct {
+	ID    int                                    // stable, public identifier
+	Area  Area                                   // part of the mail setup it checks
+	Name  string                                 // what it checks, e.g. "SPF DNS lookup limit"
+	Check func(d *collector.DomainInfo) *Outcome // nil when the rule does not apply
+}
+
+// Outcome is what a rule found
+type Outcome struct {
+	Status      Status
+	Description string // short outcome, e.g. "Ends with ~all"
+	Message     string // explanation and advice
+}
+
+func pass(description, message string) *Outcome {
+	return &Outcome{StatusPass, description, message}
+}
+
+func warn(description, message string) *Outcome {
+	return &Outcome{StatusWarn, description, message}
+}
+
+func fail(description, message string) *Outcome {
+	return &Outcome{StatusFail, description, message}
+}
+
+func inform(description, message string) *Outcome {
+	return &Outcome{StatusInfo, description, message}
+}
+
+// unchecked returns an info outcome when the lookup behind area failed, so a rule can't tell
+// whether the record is missing; nil otherwise
+func unchecked(d *collector.DomainInfo, area Area) *Outcome {
+	err, failed := d.LookupFailure(area.Check())
+	if !failed {
+		return nil
+	}
+	return inform("Could not be checked", fmt.Sprintf("The %s lookup failed, so this could not be checked: %s", area, err))
+}
+
+// registry holds all rules, ordered by ID. IDs are public (JSON, README) and must never be reused.
+var registry = []Rule{
+	{1, AreaSPF, "SPF ptr mechanism", checkSPFPtrUsage},
+	{2, AreaSPF, "SPF DNS lookup limit", checkSPFLookupLimit},
+	{3, AreaSPF, "SPF all mechanism", checkSPFAllMechanism},
+	{4, AreaDMARC, "DMARC policy", checkDMARCPolicy},
+	{5, AreaDMARC, "DMARC record exists", checkDMARCExists},
+	{6, AreaSPF, "SPF record exists", checkSPFExists},
+	{7, AreaDKIM, "DKIM keys published", checkDKIMExists},
+	{8, AreaDNSSEC, "DNSSEC enabled", checkDNSSECEnabled},
+	{9, AreaMX, "MX records exist", checkMXExists},
+	{10, AreaMX, "MX hosts resolve", checkMXHasIPs},
+	{11, AreaMX, "MX hosts have IPv6", checkMXHasIPv6},
+	{12, AreaMX, "MX redundancy", checkMXRedundancy},
+	{13, AreaMX, "MX record count", checkMXTooMany},
+	{14, AreaMX, "MX not localhost", checkMXLocalhost},
+	{15, AreaMX, "MX no private IPs", checkMXPrivateIPs},
+	{16, AreaSPF, "Single SPF record", checkSPFMultipleRecords},
+	{17, AreaDMARC, "DMARC syntax", checkDMARCValid},
+	{18, AreaDMARC, "DMARC percentage", checkDMARCPercentage},
+	{19, AreaDMARC, "DMARC aggregate reporting", checkDMARCReporting},
+	{20, AreaDMARC, "DMARC subdomain policy", checkDMARCSubdomainPolicy},
+	{21, AreaDNSSEC, "DNSSEC signature expiry", checkDNSSECSignatureExpiry},
+	{22, AreaMX, "MX hosts not CNAMEs", checkMXCNAME},
+}
+
+// Rules returns all rules, ordered by ID
+func Rules() []Rule {
+	return append([]Rule(nil), registry...)
+}
+
 // RuleResult represents the outcome of a rule check
 type RuleResult struct {
 	RuleID      int    `json:"rule_id"`
@@ -40,87 +149,44 @@ type RuleResult struct {
 	Message     string `json:"message"`
 }
 
-// EnhancedDomainInfo wraps DomainInfo with additional rule check results
-type EnhancedDomainInfo struct {
+// Report is the collected DNS data together with the rule results
+type Report struct {
 	*collector.DomainInfo
 	RuleResults []RuleResult `json:"rule_results,omitempty"`
 }
 
-// NewEnhancedDomainInfo creates a new EnhancedDomainInfo from a DomainInfo
-func NewEnhancedDomainInfo(info *collector.DomainInfo) *EnhancedDomainInfo {
-	return &EnhancedDomainInfo{
-		DomainInfo:  info,
-		RuleResults: []RuleResult{},
+// Evaluate runs all rules against the collected data; results are ordered by rule ID
+func Evaluate(d *collector.DomainInfo) *Report {
+	report := &Report{DomainInfo: d, RuleResults: []RuleResult{}}
+	for _, rule := range registry {
+		if o := rule.Check(d); o != nil {
+			report.RuleResults = append(report.RuleResults, RuleResult{
+				RuleID:      rule.ID,
+				Area:        rule.Area,
+				Description: o.Description,
+				Status:      o.Status,
+				Message:     o.Message,
+			})
+		}
 	}
-}
-
-// add appends a rule result
-func (info *EnhancedDomainInfo) add(id int, area Area, description string, status Status, message string) {
-	info.RuleResults = append(info.RuleResults, RuleResult{
-		RuleID:      id,
-		Area:        area,
-		Description: description,
-		Status:      status,
-		Message:     message,
-	})
-}
-
-// addIfLookupFailed records an info result and returns true when the lookup for check failed,
-// so the rule can't tell whether the record is missing
-func (info *EnhancedDomainInfo) addIfLookupFailed(id int, area Area, check string) bool {
-	err, failed := info.LookupFailure(check)
-	if failed {
-		info.add(id, area, "Could not be checked", StatusInfo,
-			fmt.Sprintf("The %s lookup failed, so this could not be checked: %s", area, err))
-	}
-	return failed
+	return report
 }
 
 // HasStatus reports whether any rule ended with the given status
-func (info *EnhancedDomainInfo) HasStatus(status Status) bool {
-	for _, r := range info.RuleResults {
-		if r.Status == status {
+func (r *Report) HasStatus(status Status) bool {
+	for _, res := range r.RuleResults {
+		if res.Status == status {
 			return true
 		}
 	}
 	return false
 }
 
-// ApplyAllRules runs all available rules against the domain info; results are ordered by rule ID
-func ApplyAllRules(info *EnhancedDomainInfo) {
-	// Apply SPF rules
-	CheckSPFExists(info)
-	CheckSPFMultipleRecords(info)
-	CheckSPFPtrUsage(info)
-	CheckSPFLookupLimit(info)
-	CheckSPFAllMechanism(info)
-
-	// Apply DMARC rules
-	CheckDMARCExists(info)
-	CheckDMARCValid(info)
-	CheckDMARCPolicy(info)
-	CheckDMARCPercentage(info)
-	CheckDMARCReporting(info)
-	CheckDMARCSubdomainPolicy(info)
-
-	// Apply DKIM rules
-	CheckDKIMExists(info)
-
-	// Apply DNSSEC rules
-	CheckDNSSECEnabled(info)
-	CheckDNSSECSignatureExpiry(info)
-
-	// Apply MX rules
-	CheckMXExists(info)
-	CheckMXHasIPs(info)
-	CheckMXHasIPv6(info)
-	CheckMXRedundancy(info)
-	CheckMXTooMany(info)
-	CheckMXLocalhost(info)
-	CheckMXPrivateIPs(info)
-	CheckMXCNAME(info)
-
-	sort.SliceStable(info.RuleResults, func(i, j int) bool {
-		return info.RuleResults[i].RuleID < info.RuleResults[j].RuleID
-	})
+// Worst returns the most severe status of all results
+func (r *Report) Worst() Status {
+	worst := StatusPass
+	for _, res := range r.RuleResults {
+		worst = Worst(worst, res.Status)
+	}
+	return worst
 }

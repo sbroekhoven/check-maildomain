@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sbroekhoven/check-maildomain/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/internal/output"
 	"github.com/sbroekhoven/check-maildomain/internal/resolver"
 	"github.com/sbroekhoven/check-maildomain/internal/rules"
 	"golang.org/x/net/idna"
@@ -26,7 +28,7 @@ var (
 // Exit codes
 const (
 	exitOK    = 0
-	exitError = 1 // usage or runtime error, or a DNS lookup failed so the results are incomplete
+	exitError = 1 // usage or runtime error, an output file could not be written, or a DNS lookup failed
 	exitFail  = 2 // at least one rule failed
 )
 
@@ -40,10 +42,10 @@ func run() int {
 	nameserver := flag.String("nameserver", "8.8.8.8", "nameserver to use, optionally with port (e.g. 1.1.1.1, [2606:4700:4700::1111]:53)")
 	fallback := flag.String("fallback", "", "fallback nameserver used when the primary one does not respond")
 	timeout := flag.Duration("timeout", 3*time.Second, "timeout per DNS query")
-	jsonOutput := flag.Bool("json", false, "output as JSON")
-	outputFolder := flag.String("output", "", "folder to save JSON output files (implies -json)")
-	htmlFile := flag.String("html", "", "write an HTML report to this file (- for stdout)")
+	jsonFile := flag.String("json", "", "also write the results as JSON to this file (or into this folder/)")
+	htmlFile := flag.String("html", "", "also write an HTML report to this file (or into this folder/)")
 	verbose := flag.Bool("v", false, "show details of passing checks too")
+	listRules := flag.Bool("rules", false, "list all checks and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	var selectors []string
 	flag.Func("selector", "extra DKIM selector to check (repeatable)", func(s string) error {
@@ -56,6 +58,10 @@ func run() int {
 
 	if *showVersion {
 		fmt.Printf("check-maildomain %s (commit %s, built %s)\n", version, commit, date)
+		return exitOK
+	}
+	if *listRules {
+		printRules()
 		return exitOK
 	}
 
@@ -78,55 +84,61 @@ func run() int {
 	// Collect all DNS information and apply rules
 	res := resolver.New(*nameserver, *fallback, *timeout)
 	info := collector.CollectDNSInfo(domain, res, collector.Options{DKIMSelectors: selectors})
-	enhanced := rules.NewEnhancedDomainInfo(info)
-	rules.ApplyAllRules(enhanced)
+	report := rules.Evaluate(info)
 
-	// Output results
-	if *htmlFile != "" {
-		if err := saveHTML(*htmlFile, enhanced, res.Server); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing HTML report: %v\n", err)
-			return exitError
+	// Output results: always the console, plus the requested files
+	output.NewConsole(os.Stdout, *verbose).Print(report, res.Server)
+
+	writeFailed := false
+	if *jsonFile != "" {
+		err := writeFile(*jsonFile, domain, ".json", "JSON", func(w io.Writer) error {
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			return enc.Encode(report)
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing JSON: %v\n", err)
+			writeFailed = true
 		}
 	}
-
-	if *htmlFile == "-" {
-		// The HTML report already went to stdout
-	} else if *jsonOutput || *outputFolder != "" {
-		jsonData, err := json.MarshalIndent(enhanced, "", "  ")
+	if *htmlFile != "" {
+		err := writeFile(*htmlFile, domain, ".html", "HTML report", func(w io.Writer) error {
+			return output.WriteHTML(w, report, res.Server, version)
+		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error marshaling to JSON: %v\n", err)
-			return exitError
+			fmt.Fprintf(os.Stderr, "Error writing HTML report: %v\n", err)
+			writeFailed = true
 		}
-
-		// If output folder is specified, save to file
-		if *outputFolder != "" {
-			filename, err := saveJSON(*outputFolder, domain, jsonData)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error saving JSON: %v\n", err)
-				return exitError
-			}
-			fmt.Fprintf(os.Stderr, "Results saved to: %s\n", filename)
-		}
-
-		fmt.Println(string(jsonData))
-	} else {
-		newConsole(os.Stdout, *verbose).print(enhanced, res.Server)
+	}
+	if writeFailed {
+		return exitError
 	}
 
 	// Incomplete results take precedence: a failed rule may be caused by the failed lookup
 	if info.HasFailedLookups() {
 		checks := make([]string, 0, len(info.Failed))
 		for check := range info.Failed {
-			checks = append(checks, check)
+			checks = append(checks, string(check))
 		}
 		sort.Strings(checks)
 		fmt.Fprintf(os.Stderr, "Warning: DNS lookups failed for %s; results are incomplete\n", strings.Join(checks, ", "))
 		return exitError
 	}
-	if enhanced.HasStatus(rules.StatusFail) {
+	if report.HasStatus(rules.StatusFail) {
 		return exitFail
 	}
 	return exitOK
+}
+
+// printRules lists all checks, grouped by area
+func printRules() {
+	for _, area := range rules.Areas {
+		for _, rule := range rules.Rules() {
+			if rule.Area == area {
+				fmt.Printf("%3d  %-7s %s\n", rule.ID, rule.Area, rule.Name)
+			}
+		}
+	}
 }
 
 // normalizeDomain lowercases the domain, strips a trailing dot and converts IDNs to punycode
@@ -142,35 +154,39 @@ func normalizeDomain(domain string) (string, error) {
 	return ascii, nil
 }
 
-// saveHTML writes the HTML report to filename, or to stdout when filename is "-"
-func saveHTML(filename string, e *rules.EnhancedDomainInfo, nameserver string) error {
-	if filename == "-" {
-		return writeHTML(os.Stdout, e, nameserver)
+// outputPath returns the file to write for target. A target that is an existing directory or ends
+// in a path separator gets a timestamped file name inside it, e.g. 20261021001500-example.com.json.
+func outputPath(target, domain, ext string, now time.Time) string {
+	isDir := strings.HasSuffix(target, "/") || strings.HasSuffix(target, string(os.PathSeparator))
+	if fi, err := os.Stat(target); err == nil && fi.IsDir() {
+		isDir = true
+	}
+	if !isDir {
+		return target
+	}
+	return filepath.Join(target, now.Format("20060102150405")+"-"+domain+ext)
+}
+
+// writeFile writes an output file for target (see outputPath), creating missing parent folders,
+// and reports the saved path on stderr
+func writeFile(target, domain, ext, label string, write func(io.Writer) error) error {
+	path := outputPath(target, domain, ext, time.Now())
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
 	}
 
-	f, err := os.Create(filename)
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	if err := writeHTML(f, e, nameserver); err != nil {
+	if err := write(f); err != nil {
 		f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Report saved to: %s\n", filename)
+
+	fmt.Fprintf(os.Stderr, "%s saved to: %s\n", label, path)
 	return nil
-}
-
-func saveJSON(folder, domain string, data []byte) (string, error) {
-	// Create output folder if it doesn't exist
-	if err := os.MkdirAll(folder, 0755); err != nil {
-		return "", err
-	}
-
-	// Generate filename with timestamp and domain
-	timestamp := time.Now().Format("20060102150405") // YYYYMMDDHHmmss
-	filename := filepath.Join(folder, fmt.Sprintf("%s-%s.json", timestamp, domain))
-	return filename, os.WriteFile(filename, data, 0644)
 }

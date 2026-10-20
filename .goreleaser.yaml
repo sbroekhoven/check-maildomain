@@ -5,7 +5,9 @@ before:
   hooks:
     - go mod tidy
 builds:
-  - env:
+  - main: ./cmd/check-maildomain
+    binary: check-maildomain
+    env:
       - CGO_ENABLED=0
     goos:
       - linux

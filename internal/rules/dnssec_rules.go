@@ -3,53 +3,55 @@ package rules
 import (
 	"fmt"
 	"time"
+
+	"github.com/sbroekhoven/check-maildomain/internal/collector"
 )
 
 // signatureExpiryWarning is how long before expiry a DNSKEY signature triggers a warning
 const signatureExpiryWarning = 7 * 24 * time.Hour
 
-// CheckDNSSECEnabled verifies if DNSSEC is enabled for the domain
-func CheckDNSSECEnabled(info *EnhancedDomainInfo) {
-	if info.addIfLookupFailed(8, AreaDNSSEC, "dnssec") {
-		return
+// checkDNSSECEnabled verifies if DNSSEC is enabled for the domain
+func checkDNSSECEnabled(d *collector.DomainInfo) *Outcome {
+	if o := unchecked(d, AreaDNSSEC); o != nil {
+		return o
 	}
-	d := info.DNSSECInfo
+	sec := d.DNSSECInfo
 	switch {
-	case d == nil:
-		info.add(8, AreaDNSSEC, "Status unknown", StatusInfo,
+	case sec == nil:
+		return inform("Status unknown",
 			"DNSSEC status could not be determined. DNSSEC adds an additional layer of security to DNS lookups.")
-	case d.HasDNSKEY && d.HasDS:
-		info.add(8, AreaDNSSEC, "Signed, DS published at parent", StatusPass,
+	case sec.HasDNSKEY && sec.HasDS:
+		return pass("Signed, DS published at parent",
 			"DNSSEC is enabled for this domain (DNSKEY and DS present), providing additional security for DNS lookups.")
-	case d.HasDNSKEY:
-		info.add(8, AreaDNSSEC, "Signed, but no DS at parent", StatusWarn,
+	case sec.HasDNSKEY:
+		return warn("Signed, but no DS at parent",
 			"The zone is signed (DNSKEY present) but the parent has no DS record, so the chain of trust is incomplete. Publish the DS record at your registrar.")
-	case d.HasDS:
-		info.add(8, AreaDNSSEC, "DS at parent, but zone not signed", StatusFail,
+	case sec.HasDS:
+		return fail("DS at parent, but zone not signed",
 			"A DS record exists at the parent but the zone publishes no DNSKEY. Validating resolvers will fail to resolve this domain.")
 	default:
-		info.add(8, AreaDNSSEC, "Not enabled", StatusWarn,
+		return warn("Not enabled",
 			"DNSSEC is not enabled for this domain. Consider enabling DNSSEC to protect against DNS spoofing attacks.")
 	}
 }
 
-// CheckDNSSECSignatureExpiry verifies that the DNSKEY signatures are not (nearly) expired
-func CheckDNSSECSignatureExpiry(info *EnhancedDomainInfo) {
-	if info.DNSSECInfo == nil || !info.DNSSECInfo.HasDNSKEY || info.DNSSECInfo.SignatureExpiry.IsZero() {
-		return
+// checkDNSSECSignatureExpiry verifies that the DNSKEY signatures are not (nearly) expired
+func checkDNSSECSignatureExpiry(d *collector.DomainInfo) *Outcome {
+	if d.DNSSECInfo == nil || !d.DNSSECInfo.HasDNSKEY || d.DNSSECInfo.SignatureExpiry.IsZero() {
+		return nil
 	}
 
-	expiry := info.DNSSECInfo.SignatureExpiry
-	remaining := expiry.Sub(info.QueryTime)
+	expiry := d.DNSSECInfo.SignatureExpiry
+	remaining := expiry.Sub(d.QueryTime)
 	switch {
 	case remaining <= 0:
-		info.add(21, AreaDNSSEC, "Signatures expired", StatusFail,
+		return fail("Signatures expired",
 			fmt.Sprintf("DNSKEY signatures expired at %s. Validating resolvers will fail to resolve this domain.", expiry.UTC().Format(time.RFC3339)))
 	case remaining < signatureExpiryWarning:
-		info.add(21, AreaDNSSEC, "Signatures expire in "+remaining.Round(time.Hour).String(), StatusWarn,
+		return warn("Signatures expire in "+remaining.Round(time.Hour).String(),
 			fmt.Sprintf("DNSKEY signatures expire at %s (in %s). Check that re-signing works.", expiry.UTC().Format(time.RFC3339), remaining.Round(time.Hour)))
 	default:
-		info.add(21, AreaDNSSEC, "Signatures valid until "+expiry.UTC().Format("2006-01-02"), StatusPass,
+		return pass("Signatures valid until "+expiry.UTC().Format("2006-01-02"),
 			fmt.Sprintf("DNSKEY signatures are valid until %s.", expiry.UTC().Format(time.RFC3339)))
 	}
 }

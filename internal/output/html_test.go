@@ -1,4 +1,4 @@
-package main
+package output
 
 import (
 	"strings"
@@ -17,12 +17,11 @@ func testReport(t *testing.T, setup func(*collector.DomainInfo)) string {
 	info := collector.NewDomainInfo("example.com")
 	info.QueryTime = time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
 	setup(info)
-	e := rules.NewEnhancedDomainInfo(info)
-	rules.ApplyAllRules(e)
+	e := rules.Evaluate(info)
 
 	var out strings.Builder
-	if err := writeHTML(&out, e, "8.8.8.8:53"); err != nil {
-		t.Fatalf("writeHTML: %v", err)
+	if err := WriteHTML(&out, e, "8.8.8.8:53", "test"); err != nil {
+		t.Fatalf("WriteHTML: %v", err)
 	}
 	return out.String()
 }
