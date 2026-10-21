@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // DNSSECInfo contains basic DNSSEC information for a domain

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 	"golang.org/x/net/publicsuffix"
 )
 

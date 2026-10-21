@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
-	"github.com/sbroekhoven/check-maildomain/internal/dmarc"
-	"github.com/sbroekhoven/check-maildomain/internal/mx"
-	"github.com/sbroekhoven/check-maildomain/internal/rules"
-	"github.com/sbroekhoven/check-maildomain/internal/spf"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/dmarc"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/mx"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/rules"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/spf"
 )
 
 func testReport(t *testing.T, setup func(*collector.DomainInfo)) string {

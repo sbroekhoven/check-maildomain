@@ -4,14 +4,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sbroekhoven/check-maildomain/internal/bimi"
-	"github.com/sbroekhoven/check-maildomain/internal/dkim"
-	"github.com/sbroekhoven/check-maildomain/internal/dmarc"
-	"github.com/sbroekhoven/check-maildomain/internal/dnssec"
-	"github.com/sbroekhoven/check-maildomain/internal/mx"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
-	"github.com/sbroekhoven/check-maildomain/internal/spf"
-	"github.com/sbroekhoven/check-maildomain/internal/transport"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/bimi"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/dkim"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/dmarc"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/dnssec"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/mx"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/spf"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/transport"
 )
 
 // Check identifies one lookup of the collection; it is the key of Errors and Failed

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
-	"github.com/sbroekhoven/check-maildomain/internal/dkim"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/dkim"
 )
 
 // checkDKIMExists attempts to verify if DKIM records might exist for the domain

@@ -3,7 +3,7 @@ package rules
 import (
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
 )
 
 // checkBIMIRecord verifies the default._bimi TXT record that points to the brand logo

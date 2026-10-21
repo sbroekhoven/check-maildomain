@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // TLSRPT is the SMTP TLS reporting configuration of a domain (RFC 8460)

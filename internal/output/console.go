@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/rules"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/rules"
 )
 
 const (

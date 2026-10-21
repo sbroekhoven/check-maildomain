@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
 )
 
 // signatureExpiryWarning is how long before expiry a DNSKEY signature triggers a warning

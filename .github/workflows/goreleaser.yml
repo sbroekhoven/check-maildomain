@@ -29,3 +29,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Release the tag that triggered this run. Without it, GoReleaser picks the highest
+          # tag on the commit, which goes wrong when one commit has several tags.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}

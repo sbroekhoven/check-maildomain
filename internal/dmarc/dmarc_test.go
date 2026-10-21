@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 func TestParseDMARCRecord(t *testing.T) {

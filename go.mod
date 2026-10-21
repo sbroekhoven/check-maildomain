@@ -1,4 +1,4 @@
-module github.com/sbroekhoven/check-maildomain
+module github.com/sbroekhoven/check-maildomain/v2
 
 go 1.24.3
 

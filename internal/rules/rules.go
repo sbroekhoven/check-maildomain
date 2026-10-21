@@ -3,7 +3,7 @@ package rules
 import (
 	"fmt"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
 )
 
 // Status is the outcome of a rule check

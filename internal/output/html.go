@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
-	"github.com/sbroekhoven/check-maildomain/internal/mx"
-	"github.com/sbroekhoven/check-maildomain/internal/rules"
-	"github.com/sbroekhoven/check-maildomain/internal/spf"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/mx"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/rules"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/spf"
 )
 
 //go:embed templates/report.html.tmpl

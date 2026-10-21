@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
-	"github.com/sbroekhoven/check-maildomain/internal/rules"
-	"github.com/sbroekhoven/check-maildomain/internal/spf"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/rules"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/spf"
 )
 
 func TestWrap(t *testing.T) {

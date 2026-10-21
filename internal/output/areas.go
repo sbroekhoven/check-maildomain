@@ -6,8 +6,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/mx"
-	"github.com/sbroekhoven/check-maildomain/internal/rules"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/mx"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/rules"
 )
 
 // areaResults returns the results of one area and the worst status among them

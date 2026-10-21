@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // Record represents a DNS record with its type and value

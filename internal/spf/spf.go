@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // MaxDNSLookups is the RFC 7208 limit on DNS-querying terms during SPF evaluation

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
-	"github.com/sbroekhoven/check-maildomain/internal/spf"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/spf"
 )
 
 // checkSPFPtrUsage checks if SPF record uses the deprecated ptr mechanism (RFC 7208 5.5)

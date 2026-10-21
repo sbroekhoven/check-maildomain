@@ -5,8 +5,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
-	"github.com/sbroekhoven/check-maildomain/internal/mx"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/mx"
 )
 
 // mailHosts returns the MX records to run host checks on; none for a missing or null MX

@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // DKIMInfo contains information about DKIM configuration for a domain

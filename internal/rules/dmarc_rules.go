@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
 )
 
 // checkDMARCPolicy verifies that DMARC policy is set to reject or quarantine

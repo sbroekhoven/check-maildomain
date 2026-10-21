@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 func TestParseTerm(t *testing.T) {

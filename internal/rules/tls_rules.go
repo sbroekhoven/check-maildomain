@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
-	"github.com/sbroekhoven/check-maildomain/internal/transport"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/transport"
 )
 
 // minPolicyAge is the max_age below which an MTA-STS policy protects too briefly (1 day)

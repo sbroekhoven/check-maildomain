@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sbroekhoven/check-maildomain/internal/dmarc"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/dmarc"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // Record is a parsed BIMI record ("v=BIMI1; l=<logo URL>; a=<certificate URL>")

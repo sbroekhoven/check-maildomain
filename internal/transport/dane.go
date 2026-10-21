@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // DANEHost holds the TLSA records published for an MX host (RFC 7672)

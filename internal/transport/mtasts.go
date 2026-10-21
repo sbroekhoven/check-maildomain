@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
 )
 
 // maxPolicySize is the largest MTA-STS policy we read (RFC 8461 3.3 suggests 64 KiB)

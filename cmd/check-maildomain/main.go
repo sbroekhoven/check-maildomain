@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sbroekhoven/check-maildomain/internal/collector"
-	"github.com/sbroekhoven/check-maildomain/internal/output"
-	"github.com/sbroekhoven/check-maildomain/internal/resolver"
-	"github.com/sbroekhoven/check-maildomain/internal/rules"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/collector"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/output"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/resolver"
+	"github.com/sbroekhoven/check-maildomain/v2/internal/rules"
 	"golang.org/x/net/idna"
 )
 

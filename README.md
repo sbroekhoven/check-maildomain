@@ -1,6 +1,6 @@
 # Email Domain Security Checker
 
-A command-line tool that analyzes email domain configurations for security and deliverability best practices.
+A command-line tool that analyzes email domain configurations for security and deliverability best practices. For the domain's general DNS setup (delegation, nameservers, SOA, DNSSEC, registration), see its sibling [check-domain](https://github.com/sbroekhoven/check-domain).
 
 ## Overview
 
@@ -31,7 +31,7 @@ It evaluates these configurations against a set of rules and reports each findin
 ## Installation
 
 ```bash
-go install github.com/sbroekhoven/check-maildomain/cmd/check-maildomain@latest
+go install github.com/sbroekhoven/check-maildomain/v2/cmd/check-maildomain@latest
 ```
 
 Or download a binary from the [releases page](https://github.com/sbroekhoven/check-maildomain/releases), or build from source:
@@ -197,7 +197,7 @@ go test ./...
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+Apache License 2.0, see [LICENSE](LICENSE).
 
 ## Contributing
 
