@@ -40,8 +40,8 @@ func TestOutputPath(t *testing.T) {
 	}{
 		{"report.json", "report.json"},
 		{"out/report.html", "out/report.html"},
-		{"runs/", filepath.Join("runs", "20261021001500-example.com.json")},
-		{dir, filepath.Join(dir, "20261021001500-example.com.json")},
+		{"runs/", filepath.Join("runs", "20261021001500-example.com-check-maildomain.json")},
+		{dir, filepath.Join(dir, "20261021001500-example.com-check-maildomain.json")},
 	}
 	for _, tt := range tests {
 		if got := outputPath(tt.target, "example.com", ".json", now); got != tt.want {
@@ -61,7 +61,7 @@ func TestWriteFile(t *testing.T) {
 
 	t.Run("creates parent folders", func(t *testing.T) {
 		path := filepath.Join(dir, "a", "b", "c.json")
-		if err := writeFile(path, "example.com", ".json", "JSON", write("{}")); err != nil {
+		if _, err := writeFile(path, "example.com", ".json", write("{}")); err != nil {
 			t.Fatalf("writeFile: %v", err)
 		}
 		if got, _ := os.ReadFile(path); string(got) != "{}" {
@@ -71,7 +71,7 @@ func TestWriteFile(t *testing.T) {
 
 	t.Run("write error", func(t *testing.T) {
 		boom := errors.New("boom")
-		err := writeFile(filepath.Join(dir, "x.json"), "example.com", ".json", "JSON", func(io.Writer) error { return boom })
+		_, err := writeFile(filepath.Join(dir, "x.json"), "example.com", ".json", func(io.Writer) error { return boom })
 		if !errors.Is(err, boom) {
 			t.Errorf("writeFile error = %v, want %v", err, boom)
 		}
@@ -82,7 +82,7 @@ func TestWriteFile(t *testing.T) {
 		if err := os.WriteFile(file, nil, 0644); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeFile(filepath.Join(file, "sub", "x.json"), "example.com", ".json", "JSON", write("{}")); err == nil {
+		if _, err := writeFile(filepath.Join(file, "sub", "x.json"), "example.com", ".json", write("{}")); err == nil {
 			t.Error("writeFile under a regular file should fail")
 		}
 	})

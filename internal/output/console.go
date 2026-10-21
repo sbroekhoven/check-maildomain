@@ -25,14 +25,18 @@ type Console struct {
 	width   int  // wrap text at this many columns
 }
 
-// NewConsole creates a Console writing to f. Colours are used only when f is a terminal.
+// NewConsole creates a Console writing to w. Colours are used only when w is a terminal.
 // verbose also shows the explanation of passing checks.
-func NewConsole(f *os.File, verbose bool) *Console {
+func NewConsole(w io.Writer, verbose bool) *Console {
 	width := defWidth
 	if n, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && n > 0 {
 		width = max(n, minWidth)
 	}
-	return &Console{w: f, color: useColor(f), verbose: verbose, width: width}
+	color := false
+	if f, ok := w.(*os.File); ok {
+		color = useColor(f)
+	}
+	return &Console{w: w, color: color, verbose: verbose, width: width}
 }
 
 // useColor reports whether f is a terminal that should get colours (see https://no-color.org)

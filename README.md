@@ -61,7 +61,7 @@ check-maildomain -json results/example.json example.com
 # JSON and HTML report at the same time
 check-maildomain -json reports/example.json -html reports/example.html example.com
 
-# A folder (trailing /) gets a timestamped file name, e.g. results/20261021001500-example.com.json
+# A folder (trailing /) gets a timestamped file name, e.g. results/20261021001500-example.com-check-maildomain.json
 check-maildomain -json results/ example.com
 ```
 
@@ -93,6 +93,48 @@ MX       !  smtp.google.com (10)
 
 Results are grouped per area: `✓` pass, `!` warning, `✗` fail, `i` info. Details are shown for anything that is not a pass (use `-v` to see them all). Colours are used when writing to a terminal and are turned off when the output is piped or `NO_COLOR` is set. Long lines wrap to `$COLUMNS` (default 100).
 
+## Running from Cron
+
+With `-cron` the tool prints nothing but one JSON line per run, so a cron job can check a list of domains and keep a simple log. The full results go to the `-json` and/or `-html` files; `-cron` refuses to run without at least one of them.
+
+```bash
+# /etc/cron.d/check-maildomain: every day at 06:00, append one line per domain to checks.log
+0 6 * * * user cd /srv/checks && for d in example.com example.org example.net; do check-maildomain -cron -json results/ -html reports/ "$d"; done >> checks.log 2>&1
+```
+
+Each run adds a line like this (one line in the log; wrapped here for reading):
+
+```json
+{"time":"2026-10-21T06:00:01Z","tool":"check-maildomain","version":"2.0.0","domain":"example.com",
+ "status":"fail","exit":2,"pass":30,"warn":3,"fail":1,"info":3,"err":0,"duration_ms":620,
+ "json":"results/20261021060001-example.com-check-maildomain.json","html":"reports/20261021060001-example.com-check-maildomain.html"}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `time` | Start of the run (UTC) |
+| `tool`, `version` | The tool and its version |
+| `domain` | The domain that was checked |
+| `status` | `ok`, `fail` (a check failed) or `error` (the run could not complete), matching `exit` |
+| `exit` | Exit code: 0, 2 or 1 (see [Exit Codes](#exit-codes)) |
+| `pass`, `warn`, `fail`, `info` | Number of checks per result |
+| `err` | Number of failed lookups plus output files that could not be written |
+| `duration_ms` | How long the run took |
+| `json`, `html` | Where the results were stored (left out if not written) |
+| `error` | Why the status is `error` (left out otherwise) |
+
+A run that can't start (no or an invalid domain, no `-json`/`-html`) still logs one line with `"status":"error"`. Only a malformed command line, such as an unknown flag, prints a usage message instead. The log format is the same as [check-domain](https://github.com/sbroekhoven/check-domain)'s, so both tools can write to one log.
+
+Useful queries with [jq](https://jqlang.github.io/jq/):
+
+```bash
+# Every run that did not end OK
+jq -c 'select(.status != "ok")' checks.log
+
+# The latest result per domain
+jq -s -c 'group_by(.domain) | map(max_by(.time) | {domain, status, pass, warn, fail})[]' checks.log
+```
+
 ## HTML Report
 
 ```bash
@@ -110,6 +152,7 @@ Writes a single, self-contained HTML file (inline CSS, no external assets) that 
 | `-fallback` | | Nameserver to use when the primary does not respond |
 | `-timeout` | `3s` | Timeout per DNS query |
 | `-selector` | | Extra DKIM selector to check (repeatable, or comma-separated) |
+| `-cron` | `false` | Print only one JSON log line per run, for cron jobs (needs `-json` or `-html`) |
 | `-v` | `false` | Also show the details of passing checks |
 | `-json` | | Also write the results as JSON to this file, or into this folder (`dir/`) |
 | `-html` | | Also write an HTML report to this file, or into this folder (`dir/`) |
